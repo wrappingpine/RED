@@ -1,0 +1,6 @@
+[console_scripts]
+airmouse = airmouse.ui.main_window:run_gui
+airmouse-diagnose = airmouse.main:diagnose
+airmouse-test-camera = airmouse.main:test_camera
+airmouse-test-hand = airmouse.main:test_hand
+airmouse-test-mouse = airmouse.main:test_mouse

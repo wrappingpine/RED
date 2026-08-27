@@ -1,0 +1,23 @@
+Metadata-Version: 2.1
+Name: airmouse
+Version: 1.0.0
+Summary: Control your mouse with hand gestures via webcam on Linux
+Home-page: https://github.com/yourusername/airmouse
+Author: Air Mouse Contributors
+Author-email: 
+Keywords: mouse gesture hand tracking webcam accessibility linux uinput
+Classifier: Development Status :: 4 - Beta
+Classifier: Intended Audience :: End Users/Desktop
+Classifier: License :: OSI Approved :: MIT License
+Classifier: Operating System :: POSIX :: Linux
+Classifier: Programming Language :: Python :: 3
+Classifier: Programming Language :: Python :: 3.9
+Classifier: Programming Language :: Python :: 3.10
+Classifier: Programming Language :: Python :: 3.11
+Classifier: Programming Language :: Python :: 3.12
+Classifier: Topic :: Desktop Environment
+Classifier: Topic :: Multimedia :: Video :: Capture
+Classifier: Topic :: System :: Hardware :: Hardware Drivers
+Requires-Python: >=3.9
+Description-Content-Type: text/markdown
+Provides-Extra: dev
