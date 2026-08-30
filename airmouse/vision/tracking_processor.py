@@ -94,6 +94,7 @@ class TrackingConfig:
     virtual_plane_width: float = 0.40     # meters (40cm)
     virtual_plane_height: float = 0.25    # meters (25cm)
     use_head_coords_for_ray: bool = True  # Compute ray in head coordinates
+    head_coords_smoothing_alpha: float = 0.3  # Temporal smoothing for head coordinate system
 
     # Two-hand tracking
     enable_two_hand: bool = True      # Enable stable two-hand tracking by handedness
@@ -176,7 +177,7 @@ class OneEuroFilter:
 
 
 class VelocityLimiter:
-    """Limits the rate of change to prevent sudden jumps."""
+    """Limits the rate of change to prevent sudden jumps (for position values)."""
 
     def __init__(self, max_velocity: float = 0.5, smoothing: float = 0.3):
         self.max_velocity = max_velocity
@@ -185,7 +186,7 @@ class VelocityLimiter:
         self.prev_time: Optional[float] = None
 
     def limit(self, value: float, t: Optional[float] = None) -> float:
-        """Limit velocity and apply smoothing."""
+        """Limit velocity and apply smoothing for position values."""
         if t is None:
             t = time.time()
 
@@ -211,6 +212,39 @@ class VelocityLimiter:
 
         # Apply additional smoothing
         smoothed = self.smoothing * limited_value + (1 - self.smoothing) * self.prev_value
+
+        self.prev_value = smoothed
+        self.prev_time = t
+
+        return smoothed
+
+    def limit_delta(self, delta: float, t: Optional[float] = None) -> float:
+        """Limit velocity for delta values (already a velocity/delta, not position)."""
+        if t is None:
+            t = time.time()
+
+        if self.prev_value is None:
+            self.prev_value = 0.0
+            self.prev_time = t
+            return delta
+
+        dt = t - self.prev_time
+        if dt <= 0:
+            dt = 1e-3
+
+        # delta is already a velocity * dt, so desired_velocity = delta / dt
+        desired_velocity = delta / dt
+
+        # Clamp velocity
+        max_vel = self.max_velocity / dt  # Convert to per-frame
+        if abs(desired_velocity) > max_vel:
+            desired_velocity = max_vel if desired_velocity > 0 else -max_vel
+
+        # Apply limited velocity
+        limited_delta = desired_velocity * dt
+
+        # Apply additional smoothing
+        smoothed = self.smoothing * limited_delta + (1 - self.smoothing) * self.prev_value
 
         self.prev_value = smoothed
         self.prev_time = t
@@ -303,15 +337,11 @@ class TrackedHand:
     last_position: Tuple[float, float] = (0.0, 0.0)
     last_time: float = 0.0
 
-    # One Euro Filters for each landmark (only for key landmarks)
-    _filters: Dict[int, OneEuroFilter] = field(default_factory=dict)
-    _vel_limiters: Dict[int, VelocityLimiter] = field(default_factory=dict)
-
     # Pre-allocated arrays to avoid allocation in hot path
     _smoothed_landmarks_cache: List[Landmark] = field(default_factory=lambda: [Landmark(0.0, 0.0, 0.0) for _ in range(21)])
     _temp_landmark: Landmark = field(default_factory=lambda: Landmark(0.0, 0.0, 0.0))
 
-    # Key landmark indices to smooth
+    # Key landmark indices for jump detection (no longer smoothing - just validation)
     KEY_LANDMARKS = [
         HandLandmark.WRIST.value,
         HandLandmark.INDEX_MCP.value,
@@ -322,18 +352,6 @@ class TrackedHand:
 
     def __post_init__(self):
         self.last_time = time.time()
-
-    def _get_filter(self, idx: int) -> OneEuroFilter:
-        """Get or create One Euro Filter for landmark."""
-        if idx not in self._filters:
-            self._filters[idx] = OneEuroFilter()
-        return self._filters[idx]
-
-    def _get_vel_limiter(self, idx: int) -> VelocityLimiter:
-        """Get or create Velocity Limiter for landmark."""
-        if idx not in self._vel_limiters:
-            self._vel_limiters[idx] = VelocityLimiter()
-        return self._vel_limiters[idx]
 
     def update(self, new_hand: Hand, config: TrackingConfig) -> bool:
         """
@@ -353,49 +371,19 @@ class TrackedHand:
             self.lost_frames += 1
             return False
 
-        # Apply One Euro Filter to key landmarks FIRST (smooth before jump check)
-        # Reuse pre-allocated cache to avoid allocations
+        # NO SMOOTHING ON RAW LANDMARKS - Bug 1 fix: smoothing happens AFTER projection on (u,v) plane
+        # Just validate and copy landmarks
         cache = self._smoothed_landmarks_cache
         new_landmarks = new_hand.landmarks
 
         for i in range(21):
             lm = new_landmarks[i]
-            if i in self.KEY_LANDMARKS:
-                # Apply velocity limiting first
-                vel_limiter = self._get_vel_limiter(i)
-                lx = vel_limiter.limit(lm.x, current_time)
-                ly = vel_limiter.limit(lm.y, current_time)
-                lz = vel_limiter.limit(lm.z, current_time)
+            cache[i].x = lm.x
+            cache[i].y = lm.y
+            cache[i].z = lm.z
+            cache[i].visibility = lm.visibility
 
-                # Apply One Euro Filter
-                filt_x = self._get_filter(i * 3)
-                filt_y = self._get_filter(i * 3 + 1)
-                filt_z = self._get_filter(i * 3 + 2)
-
-                sx = filt_x.filter(lx, current_time)
-                sy = filt_y.filter(ly, current_time)
-                sz = filt_z.filter(lz, current_time)
-
-                cache[i].x = sx
-                cache[i].y = sy
-                cache[i].z = sz
-                cache[i].visibility = lm.visibility
-            else:
-                # For non-key landmarks, just copy with slight smoothing toward previous
-                if self.smoothed_landmarks and i < len(self.smoothed_landmarks):
-                    prev = self.smoothed_landmarks[i]
-                    alpha = 0.3
-                    cache[i].x = alpha * lm.x + (1 - alpha) * prev.x
-                    cache[i].y = alpha * lm.y + (1 - alpha) * prev.y
-                    cache[i].z = alpha * lm.z + (1 - alpha) * prev.z
-                    cache[i].visibility = lm.visibility
-                else:
-                    cache[i].x = lm.x
-                    cache[i].y = lm.y
-                    cache[i].z = lm.z
-                    cache[i].visibility = lm.visibility
-
-        # Check for large jumps (outlier rejection) on SMOOTHED landmarks - skip during stabilization
+        # Check for large jumps (outlier rejection) on RAW landmarks - skip during stabilization
         if self.smoothed_landmarks and config.max_landmark_jump > 0 and self.frame_count >= config.stabilization_frames:
             for idx in self.KEY_LANDMARKS:
                 if idx < 21:
@@ -411,7 +399,7 @@ class TrackedHand:
                             self.lost_frames += 1
                             return False
 
-        # Check hand center jump on SMOOTHED landmarks - skip during stabilization
+        # Check hand center jump on RAW landmarks - skip during stabilization
         if self.smoothed_landmarks and config.max_hand_center_jump > 0 and self.frame_count >= config.stabilization_frames:
             old_center = self._get_palm_center(self.smoothed_landmarks)
             new_center = self._get_palm_center(cache)
@@ -423,11 +411,11 @@ class TrackedHand:
                         self.lost_frames += 1
                         return False
 
-        # All checks passed - commit smoothed landmarks (swap references)
+        # All checks passed - commit landmarks (swap references)
         self.smoothed_landmarks, cache = cache, self.smoothed_landmarks
         self.hand = new_hand
-        self.hand.landmarks = self.smoothed_landmarks  # Replace with smoothed landmarks
-        # Recompute derived properties after landmark smoothing
+        self.hand.landmarks = self.smoothed_landmarks
+        # Recompute derived properties
         self.hand._compute_derived()
         self.frame_count += 1
         self.lost_frames = 0
@@ -483,8 +471,6 @@ class TrackedHand:
         self.smoothed_landmarks = []
         self.frame_count = 0
         self.lost_frames = 0
-        self._filters.clear()
-        self._vel_limiters.clear()
 
 
 class TrackingProcessor:
@@ -530,6 +516,20 @@ class TrackingProcessor:
         self._virtual_plane: Optional[VirtualDisplayPlane] = None
         self._projector: Optional[HandProjector] = None
         self._last_cursor_pos: Optional[Tuple[float, float]] = None
+
+        # One Euro Filters for projection coordinates (u,v) - Bug 1 fix: smoothing AFTER projection
+        self._proj_u_filter = OneEuroFilter(
+            min_cutoff=self.config.one_euro_min_cutoff,
+            beta=self.config.one_euro_beta,
+            d_cutoff=self.config.one_euro_d_cutoff
+        )
+        self._proj_v_filter = OneEuroFilter(
+            min_cutoff=self.config.one_euro_min_cutoff,
+            beta=self.config.one_euro_beta,
+            d_cutoff=self.config.one_euro_d_cutoff
+        )
+
+        # Velocity limiters for cursor movement (deltas)
         self._cursor_vel_limiter = VelocityLimiter(
             max_velocity=self.config.max_velocity,
             smoothing=self.config.velocity_smoothing
@@ -806,8 +806,12 @@ class TrackingProcessor:
 
     def _update_head_tracking(self, face: Face):
         """Update head coordinate system, virtual plane, and projector from face."""
-        # Create head coordinate system from face
-        new_head_coords = HeadCoordinateSystem.from_face(face)
+        # Create head coordinate system from face with temporal smoothing
+        new_head_coords = HeadCoordinateSystem.from_face(
+            face,
+            smoothing_alpha=self.config.head_coords_smoothing_alpha,
+            prev_coords=self._head_coords
+        )
 
         # Check if head coords changed significantly (to avoid re-creating projector unnecessarily)
         if (self._head_coords is None or not self._head_coords.is_valid() or
@@ -865,56 +869,86 @@ class TrackingProcessor:
         # Return highest confidence hand
         return max(valid_hands, key=lambda h: h.confidence)
 
-    def get_cursor_movement(self) -> Optional[Tuple[float, float]]:
+    def get_cursor_position(self) -> Optional[Tuple[float, float]]:
         """
-        Get smoothed cursor movement (dx, dy) in normalized coordinates.
+        Get smoothed cursor position (u, v) in normalized coordinates [0, 1].
 
         For head-relative mode, uses the projection result from the virtual plane.
         For legacy mode, uses the 2D hand landmark position.
 
         Returns:
-            (dx, dy) normalized movement, or None if no valid tracking
+            (u, v) normalized position on virtual plane, or None if no valid tracking
         """
         if not self._primary_hand or self._primary_hand.is_lost(self.config):
             return None
 
+        current_time = time.time()
+
         # For head-relative mode, use projection result
         if self.config.use_head_relative and self._last_projection and self._last_projection.valid:
-            current_pos = (self._last_projection.u, self._last_projection.v)
+            # Bug 1 fix: Apply One Euro Filter smoothing on (u,v) projection coordinates
+            smoothed_u = self._proj_u_filter.filter(self._last_projection.u, current_time)
+            smoothed_v = self._proj_v_filter.filter(self._last_projection.v, current_time)
+            current_pos = (smoothed_u, smoothed_v)
         else:
-            # Legacy 2D mode
+            # Legacy 2D mode - apply smoothing on 2D coordinates
             current_pos = self._primary_hand.get_cursor_position(self.config)
             if current_pos is None:
                 return None
 
-        # Initialize reference point
+        # Clamp to valid range
+        u = max(0.0, min(1.0, current_pos[0]))
+        v = max(0.0, min(1.0, current_pos[1]))
+
+        return (u, v)
+
+    def get_cursor_movement(self) -> Optional[Tuple[float, float]]:
+        """
+        Get cursor movement (dx, dy) in normalized coordinates for backward compatibility.
+
+        DEPRECATED: Use get_cursor_position() and CursorController.get_relative_movement_from_plane()
+        instead. This method maintains compatibility but the new architecture
+        separates position (TrackingProcessor) from relative movement (CursorController).
+
+        Returns:
+            (dx, dy) normalized movement, or None if no valid tracking
+        """
+        # For backward compatibility, compute movement from position
+        # This is the old behavior - new code should use get_cursor_position()
+        pos = self.get_cursor_position()
+        if pos is None:
+            return None
+
         if self._reference_point is None:
-            self._reference_point = current_pos
-            self._last_cursor_pos = current_pos
+            self._reference_point = pos
             return (0.0, 0.0)
 
-        # Calculate raw movement relative to reference point
-        dx = current_pos[0] - self._reference_point[0]
-        dy = current_pos[1] - self._reference_point[1]
+        dx = pos[0] - self._reference_point[0]
+        dy = pos[1] - self._reference_point[1]
 
         # Apply dead zone
         distance = math.sqrt(dx * dx + dy * dy)
         if distance < self.config.dead_zone_radius:
-            # In dead zone - don't move cursor, but update reference point slightly
-            # to prevent drift when leaving dead zone
             self._dead_zone_active = True
+            if self.config.use_head_relative:
+                self._reference_point = pos
             return (0.0, 0.0)
 
         self._dead_zone_active = False
 
-        # Apply velocity limiting to cursor movement - reuse pre-created limiters
+        # Bug 3 fix: Use limit_delta for deltas
         current_time = time.time()
-        limited_dx = self._cursor_vel_limiter.limit(dx, current_time)
-        limited_dy = self._cursor_vel_limiter_y.limit(dy, current_time)
+        limited_dx = self._cursor_vel_limiter.limit_delta(dx, current_time)
+        limited_dy = self._cursor_vel_limiter_y.limit_delta(dy, current_time)
 
-        # Update reference point to current position (relative tracking)
-        # This makes movement relative to hand's current position
-        self._reference_point = current_pos
+        # Bug 2 fix: Update reference point every frame in head-relative mode
+        if self.config.use_head_relative:
+            self._reference_point = pos
+        else:
+            if not self._dead_zone_active:
+                self._reference_point = pos
+
+        self._last_cursor_pos = (limited_dx, limited_dy)
 
         return (limited_dx, limited_dy)
 
@@ -989,6 +1023,11 @@ class TrackingProcessor:
         if hasattr(self, '_cursor_vel_limiter_y'):
             self._cursor_vel_limiter_y.reset()
         self._dead_zone_active = False
+        # Reset projection filters
+        if hasattr(self, '_proj_u_filter'):
+            self._proj_u_filter.reset()
+        if hasattr(self, '_proj_v_filter'):
+            self._proj_v_filter.reset()
 
 
 if __name__ == "__main__":

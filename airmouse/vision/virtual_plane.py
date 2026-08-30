@@ -304,14 +304,20 @@ class VirtualDisplayPlane:
 
         return self.head_coords.camera_to_head_batch(corners_head)
 
-    def draw_debug(self, frame, camera_matrix=None, dist_coeffs=None):
+    def draw_debug(self, frame, camera_matrix=None, dist_coeffs=None,
+                  ray_origin=None, ray_direction=None, intersection=None,
+                  normalized_coords=None):
         """
-        Draw plane outline on frame for debugging.
+        Draw comprehensive debug overlay on frame.
 
         Args:
             frame: BGR image to draw on
-            camera_matrix: Optional camera intrinsic matrix (3x3)
-            dist_coeffs: Optional distortion coefficients
+            camera_matrix: Camera intrinsic matrix (3x3)
+            dist_coeffs: Distortion coefficients
+            ray_origin: 3D ray origin in camera coordinates (e.g., eye midpoint)
+            ray_direction: 3D ray direction in camera coordinates (normalized)
+            intersection: 3D intersection point in camera coordinates
+            normalized_coords: (u, v) normalized coordinates on plane [0,1]x[0,1]
 
         Returns:
             Annotated frame
@@ -319,29 +325,102 @@ class VirtualDisplayPlane:
         if camera_matrix is None or dist_coeffs is None:
             return frame
 
-        corners = self.get_plane_corners_camera()
-        if corners is None:
+        if self.head_coords is None or not self.head_coords.is_valid():
             return frame
 
         try:
             import cv2
-            # Project 3D corners to 2D image
-            corners_2d, _ = cv2.projectPoints(
-                corners, np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
-            )
-            corners_2d = corners_2d.reshape(-1, 2).astype(int)
 
-            # Draw plane outline
-            cv2.polylines(frame, [corners_2d], True, (0, 255, 255), 2)
-
-            # Draw center
-            center = self.get_plane_center_camera()
-            if center is not None:
-                center_2d, _ = cv2.projectPoints(
-                    center.reshape(1, 3), np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+            # 1. Draw virtual plane corners (projected to 2D)
+            corners = self.get_plane_corners_camera()
+            if corners is not None:
+                corners_2d, _ = cv2.projectPoints(
+                    corners, np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
                 )
-                cx, cy = center_2d[0, 0].astype(int)
-                cv2.circle(frame, (cx, cy), 5, (0, 255, 255), -1)
+                corners_2d = corners_2d.reshape(-1, 2).astype(int)
+                cv2.polylines(frame, [corners_2d], True, (0, 255, 255), 2)
+
+                # Draw center
+                center = self.get_plane_center_camera()
+                if center is not None:
+                    center_2d, _ = cv2.projectPoints(
+                        center.reshape(1, 3), np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+                    )
+                    cx, cy = center_2d[0, 0].astype(int)
+                    cv2.circle(frame, (cx, cy), 5, (0, 255, 255), -1)
+
+            # 2. Draw head coordinate axes (forward, right, up) at eye midpoint
+            origin = self.head_coords.get_origin()
+            if origin is not None:
+                # Axis length in meters
+                axis_len = 0.1  # 10cm
+
+                # Forward axis (blue - Z)
+                forward_end = origin + self.head_coords.get_forward_vector() * axis_len
+                fwd_2d, _ = cv2.projectPoints(
+                    np.array([origin, forward_end], dtype=np.float32),
+                    np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+                )
+                fwd_2d = fwd_2d.reshape(-1, 2).astype(int)
+                cv2.arrowedLine(frame, tuple(fwd_2d[0]), tuple(fwd_2d[1]), (255, 0, 0), 2, tipLength=0.3)
+                cv2.putText(frame, "F", tuple(fwd_2d[1] + np.array([5, -5])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 1)
+
+                # Right axis (red - X)
+                right_end = origin + self.head_coords.get_right_vector() * axis_len
+                right_2d, _ = cv2.projectPoints(
+                    np.array([origin, right_end], dtype=np.float32),
+                    np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+                )
+                right_2d = right_2d.reshape(-1, 2).astype(int)
+                cv2.arrowedLine(frame, tuple(right_2d[0]), tuple(right_2d[1]), (0, 0, 255), 2, tipLength=0.3)
+                cv2.putText(frame, "R", tuple(right_2d[1] + np.array([5, -5])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
+
+                # Up axis (green - Y)
+                up_end = origin + self.head_coords.get_up_vector() * axis_len
+                up_2d, _ = cv2.projectPoints(
+                    np.array([origin, up_end], dtype=np.float32),
+                    np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+                )
+                up_2d = up_2d.reshape(-1, 2).astype(int)
+                cv2.arrowedLine(frame, tuple(up_2d[0]), tuple(up_2d[1]), (0, 255, 0), 2, tipLength=0.3)
+                cv2.putText(frame, "U", tuple(up_2d[1] + np.array([5, -5])), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 1)
+
+            # 3. Draw ray from eye midpoint through fingertip
+            if ray_origin is not None and ray_direction is not None:
+                # Draw ray line (extend to plane distance or a bit further)
+                ray_end = ray_origin + ray_direction * (self.distance + 0.1)
+                ray_pts_2d, _ = cv2.projectPoints(
+                    np.array([ray_origin, ray_end], dtype=np.float32),
+                    np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+                )
+                ray_pts_2d = ray_pts_2d.reshape(-1, 2).astype(int)
+                cv2.line(frame, tuple(ray_pts_2d[0]), tuple(ray_pts_2d[1]), (255, 255, 0), 2)
+                cv2.circle(frame, tuple(ray_pts_2d[0]), 4, (255, 255, 0), -1)  # Ray origin
+
+            # 4. Draw ray-plane intersection point
+            if intersection is not None:
+                inter_2d, _ = cv2.projectPoints(
+                    intersection.reshape(1, 3), np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+                )
+                inter_2d = inter_2d.reshape(-1, 2).astype(int)
+                cv2.circle(frame, tuple(inter_2d[0]), 8, (0, 255, 0), 2)
+                cv2.circle(frame, tuple(inter_2d[0]), 4, (0, 255, 0), -1)
+
+            # 5. Draw normalized coordinates text
+            if normalized_coords is not None:
+                u, v = normalized_coords
+                # Project plane center for text position
+                center = self.get_plane_center_camera()
+                if center is not None:
+                    center_2d, _ = cv2.projectPoints(
+                        center.reshape(1, 3), np.zeros(3), np.zeros(3), camera_matrix, dist_coeffs
+                    )
+                    cx, cy = center_2d[0, 0].astype(int)
+                    text = f"u={u:.3f}, v={v:.3f}"
+                    cv2.putText(frame, text, (cx + 10, cy - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+                    cv2.putText(frame, text, (cx + 10, cy - 10),
+                               cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
 
         except Exception as e:
             logger.debug(f"Failed to draw plane debug: {e}")

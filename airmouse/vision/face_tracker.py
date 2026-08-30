@@ -233,6 +233,11 @@ class FaceTrackerSettings:
     output_face_blendshapes: bool = False
     output_facial_transformation_matrixes: bool = True
 
+    # Temporal smoothing for stable head pose
+    enable_smoothing: bool = True           # Enable temporal smoothing of landmarks
+    smoothing_alpha: float = 0.3            # Smoothing factor (0=no smoothing, 1=max)
+    grace_period_frames: int = 15           # Frames to keep last valid face before giving up (~0.5s at 30fps)
+
 
 class FaceTracker:
     """
@@ -243,6 +248,8 @@ class FaceTracker:
     - 468 face landmarks
     - Head pose via facial transformation matrix
     - Eye midpoint, nose tip, forehead extraction
+    - Temporal smoothing for stable landmarks
+    - Grace period for face loss recovery
     """
 
     def __init__(self, settings: Optional[FaceTrackerSettings] = None):
@@ -250,6 +257,12 @@ class FaceTracker:
         self._landmarker = None
         # Pre-allocated landmark cache (468 landmarks max)
         self._landmark_cache = [FaceLandmark(0.0, 0.0, 0.0) for _ in range(468)]
+
+        # Temporal smoothing state
+        self._smoothed_landmarks: Optional[List[FaceLandmark]] = None
+        self._last_valid_face: Optional[Face] = None
+        self._frames_since_valid_face: int = 0
+
         self._initialize()
 
     def _initialize(self):
@@ -301,6 +314,7 @@ class FaceTracker:
     def process(self, frame: np.ndarray) -> List[Face]:
         """
         Process a frame and detect faces (VIDEO mode with timestamps).
+        Includes temporal smoothing and grace period for face loss.
 
         Args:
             frame: BGR image from OpenCV
@@ -326,7 +340,83 @@ class FaceTracker:
         self._timestamp_ms += 33  # ~30 FPS
         result = self._landmarker.detect_for_video(mp_image, self._timestamp_ms)
 
-        return self._convert_results(result)
+        faces = self._convert_results(result)
+
+        # Apply temporal smoothing and grace period
+        if self.settings.enable_smoothing:
+            faces = self._apply_temporal_smoothing(faces)
+
+        return faces
+
+    def _apply_temporal_smoothing(self, faces: List[Face]) -> List[Face]:
+        """Apply temporal smoothing to face landmarks and handle grace period."""
+        if not faces:
+            # No face detected - check grace period
+            self._frames_since_valid_face += 1
+
+            if (self._last_valid_face is not None and
+                    self._frames_since_valid_face <= self.settings.grace_period_frames):
+                # Return last valid face during grace period
+                logger.debug(f"Face lost - grace period frame {self._frames_since_valid_face}/"
+                           f"{self.settings.grace_period_frames}")
+                return [self._last_valid_face]
+            else:
+                # Grace period expired - clear last valid face
+                if self._frames_since_valid_face > self.settings.grace_period_frames:
+                    self._last_valid_face = None
+                    self._smoothed_landmarks = None
+                return []
+        else:
+            # Face detected - reset grace period counter
+            self._frames_since_valid_face = 0
+
+            # Apply temporal smoothing to landmarks
+            if self._smoothed_landmarks is None:
+                # First frame - initialize smoothed landmarks
+                self._smoothed_landmarks = [FaceLandmark(0.0, 0.0, 0.0) for _ in range(len(faces[0].landmarks))]
+                for i, lm in enumerate(faces[0].landmarks):
+                    self._smoothed_landmarks[i].x = lm.x
+                    self._smoothed_landmarks[i].y = lm.y
+                    self._smoothed_landmarks[i].z = lm.z
+                    self._smoothed_landmarks[i].visibility = lm.visibility
+                    self._smoothed_landmarks[i].presence = lm.presence
+            else:
+                # Exponential moving average smoothing
+                alpha = self.settings.smoothing_alpha
+                num_landmarks = min(len(faces[0].landmarks), len(self._smoothed_landmarks))
+                for i in range(num_landmarks):
+                    self._smoothed_landmarks[i].x = (
+                        alpha * faces[0].landmarks[i].x +
+                        (1 - alpha) * self._smoothed_landmarks[i].x
+                    )
+                    self._smoothed_landmarks[i].y = (
+                        alpha * faces[0].landmarks[i].y +
+                        (1 - alpha) * self._smoothed_landmarks[i].y
+                    )
+                    self._smoothed_landmarks[i].z = (
+                        alpha * faces[0].landmarks[i].z +
+                        (1 - alpha) * self._smoothed_landmarks[i].z
+                    )
+                    vis_current = faces[0].landmarks[i].visibility if faces[0].landmarks[i].visibility is not None else 1.0
+                    vis_prev = self._smoothed_landmarks[i].visibility if self._smoothed_landmarks[i].visibility is not None else 1.0
+                    self._smoothed_landmarks[i].visibility = (
+                        alpha * vis_current + (1 - alpha) * vis_prev
+                    )
+                    pres_current = faces[0].landmarks[i].presence if faces[0].landmarks[i].presence is not None else 1.0
+                    pres_prev = self._smoothed_landmarks[i].presence if self._smoothed_landmarks[i].presence is not None else 1.0
+                    self._smoothed_landmarks[i].presence = (
+                        alpha * pres_current + (1 - alpha) * pres_prev
+                    )
+
+            # Create smoothed face
+            smoothed_face = Face(
+                landmarks=self._smoothed_landmarks[:len(faces[0].landmarks)],
+                confidence=faces[0].confidence
+            )
+
+            # Cache as last valid face
+            self._last_valid_face = smoothed_face
+            return [smoothed_face]
 
     def _convert_results(self, result: mp_vision.FaceLandmarkerResult) -> List[Face]:
         """Convert MediaPipe results to our Face objects (optimized for low allocation)."""

@@ -48,13 +48,23 @@ class HeadCoordinateSystem:
     # Validity flag
     _valid: bool = False
 
+    # Temporal smoothing state
+    _smoothed_origin: Optional[np.ndarray] = None
+    _smoothed_forward: Optional[np.ndarray] = None
+    _smoothed_right: Optional[np.ndarray] = None
+    _smoothed_up: Optional[np.ndarray] = None
+    _smoothing_alpha: float = 0.3
+
     @classmethod
-    def from_face(cls, face: Face) -> "HeadCoordinateSystem":
+    def from_face(cls, face: Face, smoothing_alpha: float = 0.3,
+                  prev_coords: Optional["HeadCoordinateSystem"] = None) -> "HeadCoordinateSystem":
         """
-        Create HeadCoordinateSystem from a detected Face.
+        Create HeadCoordinateSystem from a detected Face with optional temporal smoothing.
 
         Args:
             face: Face object with computed eye_midpoint, nose_tip, forehead
+            smoothing_alpha: Smoothing factor (0=no smoothing, 1=max). Default 0.3
+            prev_coords: Previous HeadCoordinateSystem for temporal smoothing
 
         Returns:
             HeadCoordinateSystem instance
@@ -102,13 +112,37 @@ class HeadCoordinateSystem:
         # Verify orthonormality
         cls._verify_basis(forward, right, up)
 
-        return cls(
+        # Apply temporal smoothing if previous coordinates available
+        if prev_coords is not None and prev_coords.is_valid():
+            origin = cls._lerp_vector(origin, prev_coords.origin, smoothing_alpha)
+            forward = cls._lerp_vector(forward, prev_coords.forward, smoothing_alpha)
+            right = cls._lerp_vector(right, prev_coords.right, smoothing_alpha)
+            up = cls._lerp_vector(up, prev_coords.up, smoothing_alpha)
+
+            # Re-verify after smoothing
+            cls._verify_basis(forward, right, up)
+
+        coords = cls(
             origin=origin,
             forward=forward,
             right=right,
             up=up,
-            _valid=True
+            _valid=True,
+            _smoothing_alpha=smoothing_alpha
         )
+
+        # Cache smoothed values for next frame
+        coords._smoothed_origin = origin.copy()
+        coords._smoothed_forward = forward.copy()
+        coords._smoothed_right = right.copy()
+        coords._smoothed_up = up.copy()
+
+        return coords
+
+    @staticmethod
+    def _lerp_vector(current: np.ndarray, previous: np.ndarray, alpha: float) -> np.ndarray:
+        """Linear interpolation between current and previous vectors."""
+        return alpha * current + (1.0 - alpha) * previous
 
     @staticmethod
     def _verify_basis(forward: np.ndarray, right: np.ndarray, up: np.ndarray):
@@ -151,15 +185,16 @@ class HeadCoordinateSystem:
         if not self._valid:
             return np.eye(4, dtype=np.float32)
 
-        # Rotation matrix: columns are basis vectors (right, up, forward)
+        # Rotation matrix: columns are basis vectors (right, up, forward) in camera coords
+        # For camera->head, we need R.T because we're projecting onto basis vectors
         R = np.column_stack([self.right, self.up, self.forward]).astype(np.float32)
 
-        # Translation: negative origin in camera coordinates
-        t = -self.origin
+        # Translation: R^T @ (-origin) to transform origin to zero
+        t = -R.T @ self.origin
 
         # 4x4 transform matrix
         T = np.eye(4, dtype=np.float32)
-        T[:3, :3] = R
+        T[:3, :3] = R.T
         T[:3, 3] = t
 
         self._transform_matrix = T
@@ -181,13 +216,13 @@ class HeadCoordinateSystem:
         if not self._valid:
             return np.eye(4, dtype=np.float32)
 
-        # For rigid transform: inverse is [R^T, -R^T @ t; 0, 1]
+        # Rotation matrix: columns are basis vectors (right, up, forward) in camera coords
         R = np.column_stack([self.right, self.up, self.forward]).astype(np.float32)
-        t = -self.origin
 
+        # For head->camera: p_cam = R @ p_head + origin
         T_inv = np.eye(4, dtype=np.float32)
-        T_inv[:3, :3] = R.T
-        T_inv[:3, 3] = R.T @ self.origin
+        T_inv[:3, :3] = R
+        T_inv[:3, 3] = self.origin
 
         self._inverse_matrix = T_inv
         return T_inv

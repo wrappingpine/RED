@@ -368,13 +368,13 @@ class AirMouseController:
             # Revert to normal when not in precision mode
             self.cursor_controller.set_sensitivity_mode(SensitivityMode.NORMAL)
 
-        # Get cursor movement from tracking processor (normalized from virtual plane)
-        norm_movement = self.tracking_processor.get_cursor_movement()
+        # Get cursor position from tracking processor (normalized from virtual plane)
+        norm_position = self.tracking_processor.get_cursor_position()
 
-        # Convert normalized movement to pixel movement via cursor controller
+        # Convert normalized position to pixel movement via cursor controller
         rel_movement = None
-        if norm_movement is not None:
-            rel_movement = self.cursor_controller.get_relative_movement_from_plane(norm_movement[0], norm_movement[1])
+        if norm_position is not None:
+            rel_movement = self.cursor_controller.get_relative_movement_from_plane(norm_position[0], norm_position[1])
 
         # Gesture recognition using tracked hands
         gesture_start = time.time()
