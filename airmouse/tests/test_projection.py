@@ -212,10 +212,10 @@ class TestHandProjector:
 
         result = self.projector.project(hand, face)
 
-        # Should be at top (v > 0.5, closer to 1.0)
+        # Should be at top (v ≈ 0.0 = TOP of screen)
         assert result.valid is True
         assert abs(result.u - 0.5) < 0.01
-        assert result.v > 0.5
+        assert result.v < 0.5, f"Top of plane should have v < 0.5, got v={result.v}"
 
     def test_project_fingertip_bottom(self):
         """Test projecting fingertip to bottom of plane."""
@@ -226,10 +226,10 @@ class TestHandProjector:
 
         result = self.projector.project(hand, face)
 
-        # Should be at bottom (v < 0.5, closer to 0.0)
+        # Should be at bottom (v ≈ 1.0 = BOTTOM of screen)
         assert result.valid is True
         assert abs(result.u - 0.5) < 0.01
-        assert result.v < 0.5
+        assert result.v > 0.5, f"Bottom of plane should have v > 0.5, got v={result.v}"
 
     def test_project_from_landmarks(self):
         """Test projecting from individual landmarks."""
@@ -429,13 +429,16 @@ class TestHandProjector:
 
         test_positions = [
             # (head_x, head_y, head_z, expected_u, expected_v, description)
+            # Normalized: u=0 left, u=1 right; v=0 top, v=1 bottom
+            # Head coords: +X right, +Y up, +Z forward
+            # v=0 (TOP) = head Y+ (UP); v=1 (BOTTOM) = head Y- (DOWN)
             (0.0, 0.0, 0.3, 0.5, 0.5, "center"),
             (-0.2, 0.0, 0.3, 0.0, 0.5, "left edge"),
             (0.2, 0.0, 0.3, 1.0, 0.5, "right edge"),
-            (0.0, 0.125, 0.3, 0.5, 1.0, "top edge"),
-            (0.0, -0.125, 0.3, 0.5, 0.0, "bottom edge"),
-            (-0.1, 0.0625, 0.3, 0.25, 0.75, "quarter positions"),
-            (0.1, -0.0625, 0.3, 0.75, 0.25, "three-quarter positions"),
+            (0.0, 0.125, 0.3, 0.5, 0.0, "top edge"),      # head Y+ = UP → v=0 (TOP)
+            (0.0, -0.125, 0.3, 0.5, 1.0, "bottom edge"),   # head Y- = DOWN → v=1 (BOTTOM)
+            (-0.1, 0.0625, 0.3, 0.25, 0.25, "quarter positions"),  # head Y+ → v=0.25
+            (0.1, -0.0625, 0.3, 0.75, 0.75, "three-quarter positions"),  # head Y- → v=0.75
         ]
 
         for head_x, head_y, head_z, expected_u, expected_v, desc in test_positions:

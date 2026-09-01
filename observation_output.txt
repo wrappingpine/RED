@@ -1,0 +1,77 @@
+19:33:03.213 - airmouse.control.main_loop - INFO - Initializing Air Mouse...
+[ WARN:0@1.109] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video1): can't open camera by index
+[ WARN:0@1.109] global cap.cpp:475 open VIDEOIO(V4L2): backend is generally available but can't be used to capture by index
+[ WARN:0@1.110] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video1): can't open camera by index
+ioctl(VIDIOC_QBUF): Bad file descriptor
+19:33:04.302 - airmouse.camera.manager - INFO - Detected 2 camera(s)
+19:33:04.302 - airmouse.camera.manager - INFO -   /dev/video0 (Integrated_Webcam_HD: Integrate) - 640x480 @ 30fps
+19:33:04.302 - airmouse.camera.manager - INFO -   /dev/video1 (Integrated_Webcam_HD: Integrate) - 640x480 @ 30fps
+19:33:04.302 - airmouse.control.main_loop - INFO - Found 2 camera(s)
+19:33:04.303 - airmouse.control.main_loop - INFO -   /dev/video0 (Integrated_Webcam_HD: Integrate) - 640x480 @ 30fps
+19:33:04.303 - airmouse.control.main_loop - INFO -   /dev/video1 (Integrated_Webcam_HD: Integrate) - 640x480 @ 30fps
+19:33:04.303 - airmouse.camera.manager - INFO - Opening camera 0 (640x480 @ 60fps)
+19:33:04.962 - airmouse.camera.manager - INFO - Camera opened: 640x480 @ 30.0fps
+19:33:04.967 - airmouse.camera.manager - INFO - V4L2 controls: exposure_abs=False, exposure_auto=False, gain=True, wb_auto=False, wb_temp=True
+19:33:04.967 - airmouse.camera.manager - DEBUG - Could not check V4L2 controls: 'CameraManager' object has no attribute '_setup_auto_exposure'
+19:33:04.968 - airmouse.control.main_loop - INFO - Camera resolution: 640x480
+INFO: Created TensorFlow Lite XNNPACK delegate for CPU.
+WARNING: Logging before InitGoogle() is written to STDERR
+W0000 00:00:1788184985.045142   85617 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1788184985.071692   85617 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+19:33:05.072 - airmouse.vision.hand_tracker - INFO - MediaPipe HandLandmarker initialized (VIDEO mode)
+W0000 00:00:1788184985.075848   85620 face_landmarker_graph.cc:180] Sets FaceBlendshapesGraph acceleration to xnnpack by default.
+W0000 00:00:1788184985.088366   85622 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1788184985.120795   85622 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+19:33:05.127 - airmouse.vision.face_tracker - INFO - MediaPipe FaceLandmarker initialized (VIDEO mode)
+19:33:05.127 - airmouse.control.main_loop - INFO - Face tracker initialized for head-relative mode
+19:33:05.176 - airmouse.input.uinput_mouse - INFO - Opened /dev/uinput
+19:33:05.177 - airmouse.input.uinput_mouse - INFO - Virtual mouse created: Air Mouse
+19:33:05.177 - airmouse.control.main_loop - INFO - All components initialized successfully
+19:33:05.177 - airmouse.control.main_loop - INFO - Initializing Air Mouse...
+[ WARN:0@2.917] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video0): can't open camera by index
+[ WARN:0@2.917] global cap.cpp:475 open VIDEOIO(V4L2): backend is generally available but can't be used to capture by index
+[ WARN:0@2.928] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video0): can't open camera by index
+[video4linux2,v4l2 @ 0x11170940] ioctl(VIDIOC_G_INPUT): Inappropriate ioctl for device
+[ERROR:0@2.930] global obsensor_uvc_stream_channel.cpp:163 getStreamChannelGroup Camera index out of range
+[ WARN:0@2.930] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video1): can't open camera by index
+[ WARN:0@2.930] global cap.cpp:475 open VIDEOIO(V4L2): backend is generally available but can't be used to capture by index
+[ WARN:0@2.930] global cap_v4l.cpp:914 open VIDEOIO(V4L2:/dev/video1): can't open camera by index
+[ERROR:0@2.983] global obsensor_uvc_stream_channel.cpp:163 getStreamChannelGroup Camera index out of range
+19:33:05.265 - airmouse.camera.manager - INFO - Detected 2 camera(s)
+19:33:05.265 - airmouse.camera.manager - INFO -   /dev/video0 - UNAVAILABLE: Cannot open camera (permission denied or device busy)
+19:33:05.265 - airmouse.camera.manager - INFO -   /dev/video1 - UNAVAILABLE: Cannot open camera (permission denied or device busy)
+19:33:05.265 - airmouse.control.main_loop - INFO - Found 2 camera(s)
+19:33:05.265 - airmouse.control.main_loop - INFO -   /dev/video0 - UNAVAILABLE: Cannot open camera (permission denied or device busy)
+19:33:05.265 - airmouse.control.main_loop - INFO -   /dev/video1 - UNAVAILABLE: Cannot open camera (permission denied or device busy)
+19:33:05.515 - airmouse.camera.manager - INFO - Camera closed
+19:33:05.515 - airmouse.camera.manager - INFO - Opening camera 0 (640x480 @ 60fps)
+19:33:06.135 - airmouse.camera.manager - INFO - Camera opened: 640x480 @ 30.0fps
+19:33:06.143 - airmouse.camera.manager - INFO - V4L2 controls: exposure_abs=False, exposure_auto=False, gain=True, wb_auto=False, wb_temp=True
+19:33:06.143 - airmouse.camera.manager - DEBUG - Could not check V4L2 controls: 'CameraManager' object has no attribute '_setup_auto_exposure'
+19:33:06.143 - airmouse.control.main_loop - INFO - Camera resolution: 640x480
+W0000 00:00:1788184986.182276   85632 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1788184986.209382   85631 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+19:33:06.210 - airmouse.vision.hand_tracker - INFO - MediaPipe HandLandmarker initialized (VIDEO mode)
+W0000 00:00:1788184986.876906   85634 face_landmarker_graph.cc:180] Sets FaceBlendshapesGraph acceleration to xnnpack by default.
+W0000 00:00:1788184986.889649   85638 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+W0000 00:00:1788184986.914943   85636 inference_feedback_manager.cc:121] Feedback manager requires a model with a single signature inference. Disabling support for feedback tensors.
+19:33:06.922 - airmouse.vision.face_tracker - INFO - MediaPipe FaceLandmarker initialized (VIDEO mode)
+19:33:07.353 - airmouse.control.main_loop - INFO - Face tracker initialized for head-relative mode
+19:33:07.400 - airmouse.input.uinput_mouse - INFO - Opened /dev/uinput
+19:33:07.401 - airmouse.input.uinput_mouse - INFO - Virtual mouse created: Air Mouse
+19:33:07.401 - airmouse.control.main_loop - INFO - All components initialized successfully
+19:33:07.402 - airmouse.control.main_loop - INFO - Air Mouse started
+W0000 00:00:1788184987.452329   85633 landmark_projection_calculator.cc:81] Using NORM_RECT without IMAGE_DIMENSIONS is only supported for the square ROI. Provide IMAGE_DIMENSIONS or use PROJECTION_MATRIX.
+19:33:08.180 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 1/15
+19:33:08.237 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 2/15
+19:33:08.283 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 3/15
+19:33:08.336 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 4/15
+19:33:08.393 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 5/15
+19:33:08.446 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 6/15
+19:33:08.500 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 7/15
+19:33:08.746 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 1/15
+19:33:08.797 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 2/15
+19:33:08.847 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 3/15
+19:33:08.897 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 4/15
+19:33:08.950 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 5/15
+19:33:09.002 - airmouse.vision.face_tracker - DEBUG - Face lost - grace period frame 6/15

@@ -153,14 +153,16 @@ class TestVirtualDisplayPlane:
         assert abs(point_head[1]) < 1e-6
         assert abs(point_head[2] - 0.30) < 1e-6
 
-        # Top-left
-        point = plane.normalized_to_point_camera(0.0, 1.0)
+        # Top-left in screen coords: v=0.0 (top), u=0.0 (left)
+        # In head coords: head_y = +0.125 (UP), head_x = -0.20 (left)
+        point = plane.normalized_to_point_camera(0.0, 0.0)
         point_head = head_coords.camera_to_head(point)
         assert abs(point_head[0] - (-0.20)) < 1e-6
         assert abs(point_head[1] - 0.125) < 1e-6
 
-        # Bottom-right
-        point = plane.normalized_to_point_camera(1.0, 0.0)
+        # Bottom-right in screen coords: v=1.0 (bottom), u=1.0 (right)
+        # In head coords: head_y = -0.125 (DOWN), head_x = +0.20 (right)
+        point = plane.normalized_to_point_camera(1.0, 1.0)
         point_head = head_coords.camera_to_head(point)
         assert abs(point_head[0] - 0.20) < 1e-6
         assert abs(point_head[1] - (-0.125)) < 1e-6

@@ -220,8 +220,10 @@ class VirtualDisplayPlane:
         # Normalized coordinates
         # X in head coords maps to u: [-width/2, width/2] -> [0, 1]
         # Y in head coords maps to v: [-height/2, height/2] -> [0, 1]
+        # NOTE: Head coords Y+ = UP, but screen coords Y+ = DOWN.
+        # So we INVERT Y: head Y+ (up) → v decreases → cursor moves UP on screen
         u = (point_head[0] + self.width / 2) / self.width
-        v = (point_head[1] + self.height / 2) / self.height
+        v = (-point_head[1] + self.height / 2) / self.height
 
         # Clamp to [0, 1]
         u = np.clip(u, 0.0, 1.0)
@@ -249,7 +251,9 @@ class VirtualDisplayPlane:
 
         # Head coordinates
         x = (u - 0.5) * self.width
-        y = (v - 0.5) * self.height
+        # NOTE: Inverse of the inverted Y mapping in point_to_normalized
+        # v = (-y + height/2) / height  =>  -y = v * height - height/2  =>  y = -v * height + height/2 = height/2 - v * height
+        y = (0.5 - v) * self.height
         z = self.distance
 
         point_head = np.array([x, y, z], dtype=np.float32)

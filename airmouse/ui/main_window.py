@@ -430,6 +430,9 @@ class SettingsDialog(QWidget):
         # Gestures tab
         tabs.addTab(self._create_gestures_tab(), "Gestures")
 
+        # Brightness tab
+        tabs.addTab(self._create_brightness_tab(), "Brightness")
+
         # Advanced tab
         tabs.addTab(self._create_advanced_tab(), "Advanced")
 
@@ -647,6 +650,99 @@ class SettingsDialog(QWidget):
 
         return widget
 
+    def _create_brightness_tab(self) -> QWidget:
+        widget = QWidget()
+        layout = QFormLayout(widget)
+
+        # Enable auto-brightness
+        self._widgets['brightness_enabled'] = QCheckBox("Enable Auto-Brightness")
+        self._widgets['brightness_enabled'].setChecked(self._config.brightness.enabled)
+        layout.addRow("", self._widgets['brightness_enabled'])
+
+        # Require ALS
+        self._widgets['brightness_require_als'] = QCheckBox("Require Ambient Light Sensor (disable if not found)")
+        self._widgets['brightness_require_als'].setChecked(self._config.brightness.require_als)
+        layout.addRow("", self._widgets['brightness_require_als'])
+
+        # Min brightness
+        self._widgets['brightness_min'] = QDoubleSpinBox()
+        self._widgets['brightness_min'].setRange(0, 100)
+        self._widgets['brightness_min'].setSingleStep(1)
+        self._widgets['brightness_min'].setSuffix("%")
+        self._widgets['brightness_min'].setValue(int(self._config.brightness.min_brightness * 100))
+        layout.addRow("Min Brightness:", self._widgets['brightness_min'])
+
+        # Max brightness
+        self._widgets['brightness_max'] = QDoubleSpinBox()
+        self._widgets['brightness_max'].setRange(0, 100)
+        self._widgets['brightness_max'].setSingleStep(1)
+        self._widgets['brightness_max'].setSuffix("%")
+        self._widgets['brightness_max'].setValue(int(self._config.brightness.max_brightness * 100))
+        layout.addRow("Max Brightness:", self._widgets['brightness_max'])
+
+        # Poll interval
+        self._widgets['brightness_poll_interval'] = QDoubleSpinBox()
+        self._widgets['brightness_poll_interval'].setRange(0.1, 10.0)
+        self._widgets['brightness_poll_interval'].setSingleStep(0.1)
+        self._widgets['brightness_poll_interval'].setSuffix(" s")
+        self._widgets['brightness_poll_interval'].setValue(self._config.brightness.poll_interval)
+        layout.addRow("Poll Interval:", self._widgets['brightness_poll_interval'])
+
+        # Smoothing alpha
+        self._widgets['brightness_smoothing_alpha'] = QDoubleSpinBox()
+        self._widgets['brightness_smoothing_alpha'].setRange(0.01, 1.0)
+        self._widgets['brightness_smoothing_alpha'].setSingleStep(0.05)
+        self._widgets['brightness_smoothing_alpha'].setValue(self._config.brightness.smoothing_alpha)
+        layout.addRow("Smoothing (EMA α):", self._widgets['brightness_smoothing_alpha'])
+
+        # Hysteresis
+        self._widgets['brightness_hysteresis'] = QDoubleSpinBox()
+        self._widgets['brightness_hysteresis'].setRange(0, 1000)
+        self._widgets['brightness_hysteresis'].setSingleStep(1)
+        self._widgets['brightness_hysteresis'].setSuffix(" lux")
+        self._widgets['brightness_hysteresis'].setValue(self._config.brightness.hysteresis_lux)
+        layout.addRow("Hysteresis:", self._widgets['brightness_hysteresis'])
+
+        # Lux at min brightness
+        self._widgets['brightness_lux_min'] = QDoubleSpinBox()
+        self._widgets['brightness_lux_min'].setRange(0, 10000)
+        self._widgets['brightness_lux_min'].setSingleStep(10)
+        self._widgets['brightness_lux_min'].setSuffix(" lux")
+        self._widgets['brightness_lux_min'].setValue(self._config.brightness.lux_at_min)
+        layout.addRow("Lux at Min Brightness:", self._widgets['brightness_lux_min'])
+
+        # Lux at max brightness
+        self._widgets['brightness_lux_max'] = QDoubleSpinBox()
+        self._widgets['brightness_lux_max'].setRange(0, 100000)
+        self._widgets['brightness_lux_max'].setSingleStep(100)
+        self._widgets['brightness_lux_max'].setSuffix(" lux")
+        self._widgets['brightness_lux_max'].setValue(self._config.brightness.lux_at_max)
+        layout.addRow("Lux at Max Brightness:", self._widgets['brightness_lux_max'])
+
+        # Restore on exit
+        self._widgets['brightness_restore_on_exit'] = QCheckBox("Restore Original Brightness on Exit")
+        self._widgets['brightness_restore_on_exit'].setChecked(self._config.brightness.restore_on_exit)
+        layout.addRow("", self._widgets['brightness_restore_on_exit'])
+
+        # Read-only status display
+        self._widgets['brightness_current_lux'] = QLabel("-- lux")
+        self._widgets['brightness_current_lux'].setStyleSheet("color: #888; font-family: monospace;")
+        layout.addRow("Current Lux:", self._widgets['brightness_current_lux'])
+
+        self._widgets['brightness_current_brightness'] = QLabel("--%")
+        self._widgets['brightness_current_brightness'].setStyleSheet("color: #888; font-family: monospace;")
+        layout.addRow("Current Brightness:", self._widgets['brightness_current_brightness'])
+
+        self._widgets['brightness_als_status'] = QLabel("Detecting...")
+        self._widgets['brightness_als_status'].setStyleSheet("color: #888; font-family: monospace;")
+        layout.addRow("ALS Status:", self._widgets['brightness_als_status'])
+
+        self._widgets['brightness_backlight_status'] = QLabel("Detecting...")
+        self._widgets['brightness_backlight_status'].setStyleSheet("color: #888; font-family: monospace;")
+        layout.addRow("Backlight Status:", self._widgets['brightness_backlight_status'])
+
+        return widget
+
     def _apply_settings(self):
         """Apply settings to config and emit signal."""
         # Camera
@@ -685,6 +781,18 @@ class SettingsDialog(QWidget):
         self._config.virtual_mouse.vendor_id = self._widgets['vendor_id'].value()
         self._config.virtual_mouse.product_id = self._widgets['product_id'].value()
 
+        # Brightness
+        self._config.brightness.enabled = self._widgets['brightness_enabled'].isChecked()
+        self._config.brightness.require_als = self._widgets['brightness_require_als'].isChecked()
+        self._config.brightness.min_brightness = self._widgets['brightness_min'].value() / 100.0
+        self._config.brightness.max_brightness = self._widgets['brightness_max'].value() / 100.0
+        self._config.brightness.poll_interval = self._widgets['brightness_poll_interval'].value()
+        self._config.brightness.smoothing_alpha = self._widgets['brightness_smoothing_alpha'].value()
+        self._config.brightness.hysteresis_lux = self._widgets['brightness_hysteresis'].value()
+        self._config.brightness.lux_at_min = self._widgets['brightness_lux_min'].value()
+        self._config.brightness.lux_at_max = self._widgets['brightness_lux_max'].value()
+        self._config.brightness.restore_on_exit = self._widgets['brightness_restore_on_exit'].isChecked()
+
         # Emit signal with config dict
         self.settings_changed.emit(self._config_to_dict())
         self.close()
@@ -712,6 +820,20 @@ class SettingsDialog(QWidget):
             'virtual_mouse': asdict(self._config.virtual_mouse),
             'target_fps': self._config.target_fps,
             'emergency_stop_corner': self._config.emergency_stop_corner,
+            'brightness': {
+                'enabled': self._config.brightness.enabled,
+                'min_brightness': self._config.brightness.min_brightness,
+                'max_brightness': self._config.brightness.max_brightness,
+                'poll_interval': self._config.brightness.poll_interval,
+                'smoothing_alpha': self._config.brightness.smoothing_alpha,
+                'hysteresis_lux': self._config.brightness.hysteresis_lux,
+                'lux_at_min': self._config.brightness.lux_at_min,
+                'lux_at_max': self._config.brightness.lux_at_max,
+                'preferred_backlight_path': self._config.brightness.preferred_backlight_path,
+                'preferred_als_path': self._config.brightness.preferred_als_path,
+                'restore_on_exit': self._config.brightness.restore_on_exit,
+                'require_als': self._config.brightness.require_als,
+            },
         }
 
 
@@ -855,12 +977,18 @@ class MainWindow(QMainWindow):
         def error_callback(msg):
             QMessageBox.critical(self, "Error", msg)
 
+        def brightness_callback(state):
+            """Handle brightness state updates from controller."""
+            # Update UI on GUI thread
+            QTimer.singleShot(0, lambda: self._update_brightness_display(state))
+
         self.controller = AirMouseController(self.config, status_callback)
         self.controller.on_hand_detected = self._on_hand_detected
         self.controller.on_gesture = self._on_gesture
         self.controller.on_error = error_callback
         self.controller.on_stats_update = self._on_stats_update
         self.controller.on_frame_processed = self._on_frame_processed
+        self.controller.on_brightness_update = brightness_callback
 
     @Slot()
     def _on_start(self):
@@ -921,6 +1049,38 @@ class MainWindow(QMainWindow):
         """Handle processed frame from controller (worker thread)."""
         # Use QTimer.singleShot to update GUI from worker thread
         QTimer.singleShot(0, lambda: self.preview.update_frame(frame, hands))
+
+    def _update_brightness_display(self, state):
+        """Update brightness display in settings dialog (GUI thread)."""
+        if self.settings_dialog and hasattr(self.settings_dialog, '_widgets'):
+            widgets = self.settings_dialog._widgets
+            if 'brightness_current_lux' in widgets:
+                if state.current_lux is not None:
+                    widgets['brightness_current_lux'].setText(f"{state.current_lux:.0f} lux")
+                else:
+                    widgets['brightness_current_lux'].setText("-- lux")
+
+            if 'brightness_current_brightness' in widgets:
+                if state.current_brightness is not None:
+                    widgets['brightness_current_brightness'].setText(f"{state.current_brightness:.0%}")
+                else:
+                    widgets['brightness_current_brightness'].setText("--%")
+
+            if 'brightness_als_status' in widgets:
+                if state.current_lux is not None:
+                    widgets['brightness_als_status'].setText("Active")
+                    widgets['brightness_als_status'].setStyleSheet("color: #4CAF50; font-family: monospace;")
+                else:
+                    widgets['brightness_als_status'].setText("No sensor")
+                    widgets['brightness_als_status'].setStyleSheet("color: #F44336; font-family: monospace;")
+
+            if 'brightness_backlight_status' in widgets:
+                if state.current_brightness is not None:
+                    widgets['brightness_backlight_status'].setText("Active")
+                    widgets['brightness_backlight_status'].setStyleSheet("color: #4CAF50; font-family: monospace;")
+                else:
+                    widgets['brightness_backlight_status'].setText("No backlight")
+                    widgets['brightness_backlight_status'].setStyleSheet("color: #F44336; font-family: monospace;")
 
     def _update_stats_gui(self):
         """Periodic GUI update for stats only."""

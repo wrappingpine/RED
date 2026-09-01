@@ -31,6 +31,7 @@ from ..vision.tracking_processor import TrackingProcessor, TrackingConfig, Track
 from ..input.uinput_mouse import VirtualMouse, UInputDeviceConfig
 from .cursor import CursorController, CursorConfig, SmoothingAlgorithm, get_screen_size, SensitivityMode
 from ..debug.performance_monitor import PerformanceMonitor
+from ..brightness import AutoBrightnessController, BrightnessConfig, BrightnessState
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,9 @@ class AirMouseConfig:
 
     # Virtual mouse settings
     virtual_mouse: UInputDeviceConfig = field(default_factory=UInputDeviceConfig)
+
+    # Auto-brightness settings
+    brightness: BrightnessConfig = field(default_factory=BrightnessConfig)
 
     # Performance
     target_fps: int = 60
@@ -107,6 +111,7 @@ class AirMouseController:
         self.gesture_recognizer: Optional[GestureRecognizer] = None
         self.virtual_mouse: Optional[VirtualMouse] = None
         self.tracking_processor: Optional[TrackingProcessor] = None
+        self.brightness_controller: Optional[AutoBrightnessController] = None
 
         # State
         self.state = AirMouseState.STOPPED
@@ -131,6 +136,7 @@ class AirMouseController:
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_stats_update: Optional[Callable[[PerformanceStats], None]] = None
         self.on_frame_processed: Optional[Callable[[np.ndarray, List[Hand]], None]] = None
+        self.on_brightness_update: Optional[Callable[[BrightnessState], None]] = None
 
         # Performance monitor
         self.performance_monitor = PerformanceMonitor()
@@ -195,6 +201,12 @@ class AirMouseController:
             # Initialize tracking processor
             self.tracking_processor = TrackingProcessor(self.config.tracking)
 
+            # Initialize auto-brightness controller
+            self.brightness_controller = AutoBrightnessController(
+                self.config.brightness,
+                on_state_change=self._on_brightness_state_change
+            )
+
             # Initialize virtual mouse
             self.virtual_mouse = VirtualMouse(self.config.virtual_mouse)
             if not self.virtual_mouse.create():
@@ -224,6 +236,10 @@ class AirMouseController:
             if not self.initialize():
                 return False
 
+        # Start auto-brightness
+        if self.brightness_controller:
+            self.brightness_controller.start()
+
         self._running = True
         self._stop_event.clear()
         self.state = AirMouseState.RUNNING
@@ -238,6 +254,10 @@ class AirMouseController:
         logger.info("Stopping Air Mouse...")
         self._running = False
         self._stop_event.set()
+
+        # Stop auto-brightness
+        if self.brightness_controller:
+            self.brightness_controller.stop()
 
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2.0)
@@ -257,6 +277,9 @@ class AirMouseController:
                 self.cursor_controller.set_active(False)
             if self.tracking_processor:
                 self.tracking_processor.reset()
+            # Pause auto-brightness
+            if self.brightness_controller and self.brightness_controller.is_active:
+                self.brightness_controller.stop()
             logger.info("Air Mouse paused")
             self._set_status("paused", {})
 
@@ -268,6 +291,9 @@ class AirMouseController:
                 self.gesture_recognizer.set_tracking_paused(False)
             if self.cursor_controller:
                 self.cursor_controller.set_active(True)
+            # Resume auto-brightness
+            if self.brightness_controller:
+                self.brightness_controller.start()
             logger.info("Air Mouse resumed")
             self._set_status("resumed", {})
 
@@ -512,6 +538,12 @@ class AirMouseController:
         """Update status via callback."""
         if self.status_callback:
             self.status_callback(status, data)
+
+    def _on_brightness_state_change(self, state: BrightnessState):
+        """Handle brightness state changes from controller."""
+        # Forward to GUI callback if available
+        if self.on_brightness_update:
+            self.on_brightness_update(state)
 
     def _set_error(self, message: str):
         """Set error state."""

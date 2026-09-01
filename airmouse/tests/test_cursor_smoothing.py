@@ -26,11 +26,11 @@ class TestCursorConfig:
         assert config.acceleration == 1.2
 
     def test_sensitivity_modes(self):
-        """Test sensitivity mode multipliers."""
+        """Test sensitivity mode multipliers (reduced by 20%)."""
         config = CursorConfig()
-        assert config.sensitivity_precision == 0.15
-        assert config.sensitivity_normal == 0.40
-        assert config.sensitivity_fast == 0.60
+        assert config.sensitivity_precision == 0.12
+        assert config.sensitivity_normal == 0.32
+        assert config.sensitivity_fast == 0.48
 
 
 class TestCursorController:

@@ -138,7 +138,7 @@ class TestFullPipeline:
         # Cursor config
         assert hasattr(config, 'cursor')
         assert config.cursor.sensitivity_mode == CursorConfig().sensitivity_mode
-        assert config.cursor.sensitivity_normal == 0.40
+        assert config.cursor.sensitivity_normal == 0.32
 
         # Gesture config (field name is 'gestures')
         assert hasattr(config, 'gestures')

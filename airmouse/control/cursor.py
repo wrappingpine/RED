@@ -52,10 +52,10 @@ class CursorConfig:
     # Base sensitivity (1.0 = 1:1 mapping) - multiplied by mode factor
     base_sensitivity: float = 1.0
 
-    # Sensitivity multipliers for each mode
-    sensitivity_precision: float = 0.15  # 15%
-    sensitivity_normal: float = 0.40     # 40% (default)
-    sensitivity_fast: float = 0.60       # 60%
+    # Sensitivity multipliers for each mode (reduced by 20%)
+    sensitivity_precision: float = 0.12  # 12% (was 15%)
+    sensitivity_normal: float = 0.32     # 32% (was 40%)
+    sensitivity_fast: float = 0.48       # 48% (was 60%)
 
     # Acceleration curve: 1.0 = linear, >1.0 = accelerated
     acceleration: float = 1.2
