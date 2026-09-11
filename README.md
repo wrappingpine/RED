@@ -1,9 +1,11 @@
-🖐️ RED — Air Mouse
+# RED — Air Mouse
 
 <p align="center">
   <strong>Turn your camera into a mouse.</strong><br>
   Control your Linux desktop with your hands — no physical mouse required.
-</p><p align="center">
+</p>
+
+<p align="center">
   <a href="https://github.com/wrappingpine/RED">
     <img src="https://img.shields.io/badge/GitHub-RED-black?style=for-the-badge&logo=github" alt="GitHub">
   </a>
@@ -11,431 +13,349 @@
   <img src="https://img.shields.io/badge/OpenCV-Vision-blue?style=for-the-badge&logo=opencv" alt="OpenCV">
   <img src="https://img.shields.io/badge/MediaPipe-Hand%20Tracking-orange?style=for-the-badge" alt="MediaPipe">
   <img src="https://img.shields.io/badge/Status-Active%20Development-yellow?style=for-the-badge" alt="Status">
-</p>---
-
-⚡ What is RED?
-
-RED is a camera-based, hands-free mouse for Linux.
-
-It uses computer vision to track your hand and translate your movements and gestures into desktop input.
-
-        🖐️
-        │
-        │  Move / Gesture
-        ▼
-   📷 Webcam
-        │
-        ▼
-  🧠 Computer Vision
-        │
-        ▼
- 🎯 Spatial Mapping
-        │
-        ▼
- 🖱️ Input Controller
-        │
-        ▼
-   🖥️ Linux Desktop
-
-«No special hardware. No wearable controller. Just a camera and your hand.»
+  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+</p>
 
 ---
 
-🎬 Demo
+## What is RED?
 
-«🚧 Demo video coming soon»
+RED is a **camera-based, hands-free mouse for Linux**. It uses computer vision to track your hand and translate your movements and gestures into desktop input.
 
-The goal is simple:
+```
+🖐️  Move / Gesture
+    │
+    ▼
+📷 Webcam
+    │
+    ▼
+🧠 Computer Vision (MediaPipe + OpenCV)
+    │
+    ▼
+🎯 Spatial Mapping & Gesture Engine
+    │
+    ▼
+🖱️ Linux Input (Wayland / X11 / uinput)
+    │
+    ▼
+🖥️ Linux Desktop
+```
 
-Point  →  Move cursor
-Pinch  →  Click
-Gesture → Action
-
-RED is being developed toward a natural interaction model where the cursor follows your hand smoothly, accurately, and predictably.
+> **No special hardware. No wearable controller. Just a camera and your hand.**
 
 ---
 
-✨ Features
+## Features
 
-<table>
-<tr>
-<td width="50%">🖐️ Hand Tracking
+| Feature | Description |
+|---------|-------------|
+| **Hand Tracking** | Real-time hand landmark detection using MediaPipe Tasks API (VIDEO mode) |
+| **Face/Head Tracking** | Head-relative coordinate system for 3D-aware pointing |
+| **Cursor Control** | Smooth, low-latency cursor movement with adaptive smoothing (OneEuroFilter + VelocityLimiter) |
+| **Gesture Input** | Configurable gestures for click, right-click, drag, scroll, pause/resume |
+| **Multi-Hand Support** | Architecture designed for reliable two-hand interaction with stable identity |
+| **Linux Desktop Integration** | Wayland-first design with multi-backend fallback (Wayland native, ydotool, X11, uinput) |
+| **System Tray** | Cross-desktop support (AppIndicator3, StatusNotifierItem, QSystemTrayIcon) |
+| **Global Hotkeys** | Emergency disable (Super+Alt+A), pause/resume, calibrate, settings, precision toggle |
+| **Safety System** | Corner escape, velocity limiting, focus loss detection, inactivity timeout |
+| **Performance Optimized** | Kalman predictive tracking, frame coordination with timestamps, backpressure handling |
 
-Real-time hand landmark detection using MediaPipe.
+---
 
-🖱️ Cursor Control
+## How It Works
 
-Move the desktop cursor using your hand.
+RED's processing pipeline is divided into several stages:
 
-🤏 Gesture Input
-
-Use configurable hand gestures for mouse actions.
-
-👥 Multi-Hand Support
-
-Architecture designed for reliable two-hand interaction.
-
-</td><td width="50%">🎯 Spatial Mapping
-
-Converts camera-space movement into screen coordinates.
-
-🧠 Head-Relative Tracking
-
-Experimental spatial tracking using face/head landmarks.
-
-⚡ Performance Focused
-
-Designed with low-end hardware and low latency in mind.
-
-🐧 Linux First
-
-Built around Linux desktop and input systems.
-
-</td>
-</tr>
-</table>---
-
-🧠 How RED Works
-
-RED is more than simply mapping your fingertip to the screen.
-
-The processing pipeline is divided into several stages:
-
+```
 ┌───────────────────────┐
-│       📷 CAMERA       │
+│       📷 CAMERA       │  V4L2 + auto-format (MJPG/YUYV) + health scoring
 └───────────┬───────────┘
             │
             ▼
 ┌───────────────────────┐
-│      OpenCV           │
+│      OpenCV           │  Frame capture, conversion, preprocessing
 │    Frame Capture      │
 └───────────┬───────────┘
             │
             ▼
 ┌───────────────────────┐
-│     MediaPipe         │
-│   Hand + Face Vision  │
+│     MediaPipe         │  Hand Landmarker + Face Landmarker (Tasks API)
+│   Hand + Face Vision  │  21 hand landmarks + 468 face landmarks
 └───────────┬───────────┘
             │
             ▼
 ┌───────────────────────┐
-│   Spatial Mapping     │
-│  Camera → Screen      │
+│   Spatial Mapping     │  Virtual plane (30cm), ray-plane intersection
+│  Camera → Screen      │  Head-relative: eye midpoint = origin
 └───────────┬───────────┘
             │
             ▼
 ┌───────────────────────┐
-│ Gesture / State Logic │
+│   Smoothing &         │  OneEuroFilter + VelocityLimiter + Kalman predictor
+│   Prediction          │
 └───────────┬───────────┘
             │
             ▼
 ┌───────────────────────┐
-│    Linux Input        │
+│ Gesture / State Logic │  Hysteresis state machines (IDLE→DETECTING→CONFIRMED→ACTIVE→RELEASING→COOLDOWN)
+└───────────┬───────────┘
+            │
+            ▼
+┌───────────────────────┐
+│    Linux Input        │  Multi-backend: Wayland > ydotool > X11 > uinput
 └───────────┬───────────┘
             │
             ▼
        🖥️ DESKTOP
+```
 
 ---
 
-🎮 Interaction Model
+## Interaction Model
 
-RED is designed around simple, human-readable interactions.
+| Action | Input |
+|--------|-------|
+| Move cursor | ☝️ Index finger (head-relative) |
+| Left click | 🤏 Pinch (thumb + index) |
+| Right click | 🤏 Pinch (thumb + middle) |
+| Middle click | 🤏 Pinch (thumb + ring) |
+| Drag | Pinch hold + move |
+| Scroll | 🤏 Pinch + vertical movement |
+| Pause tracking | ✊ Fist |
+| Resume tracking | ✋ Open hand |
 
-Action| Input
-Move cursor| ☝️ Index finger
-Click| 🤏 Pinch
-Scroll| 🚧 In development
-Drag| 🚧 In development
-Right click| 🚧 In development
-Custom gestures| 🚧 Planned
-
-The gesture system is intentionally being developed to minimize false positives.
-
----
-
-🎯 The Hard Part: Making It Feel Natural
-
-A webcam can detect your hand.
-
-That's easy.
-
-Making it feel like a real mouse is much harder.
-
-RED focuses heavily on:
-
-        Raw Tracking
-             │
-             ▼
-       Noise Filtering
-             │
-             ▼
-       Motion Smoothing
-             │
-             ▼
-     Coordinate Mapping
-             │
-             ▼
-      Gesture Detection
-             │
-             ▼
-        Input Event
-
-Current engineering priorities
-
-- 🎯 Accurate cursor direction
-- 🪶 Smooth movement
-- ⚡ Low latency
-- 🧹 Jitter reduction
-- 🛑 False-click prevention
-- 👥 Reliable two-hand detection
-- 💡 Lighting robustness
-- 🧮 Better coordinate mapping
+> The gesture system uses hysteresis state machines to minimize false positives.
 
 ---
 
-🔬 Experimental Spatial Tracking
+## Linux Desktop Integration
 
-RED also explores a more advanced approach than traditional webcam mouse implementations.
+RED is built **Linux-first** with modern desktop environments in mind:
 
-Instead of thinking only in terms of:
+### Input Backends (Auto-detected, Priority Order)
 
-Camera Pixel → Screen Pixel
+| Backend | Desktop Environments | Method |
+|---------|---------------------|--------|
+| **Wayland Native** | GNOME, KDE, COSMIC, Sway, Hyprland | `virtual-pointer-unstable-v1` / `relative-pointer-unstable-v1` |
+| **ydotool** | Any Wayland (requires daemon) | `ydotool` socket |
+| **X11 (XTest)** | X11 sessions, XWayland | `XTestFakeMotionEvent` |
+| **uinput** | All (requires `/dev/uinput` access) | Kernel `/dev/uinput` via ctypes |
 
-the system can reason about:
+### System Tray
+- **AppIndicator3** (Primary) — Ubuntu, Pop!_OS, GNOME extensions
+- **StatusNotifierItem** (KDE) — Plasma, KDE Neon
+- **QSystemTrayIcon** (Fallback) — Generic Qt
 
-          Head
-           👤
-           │
-           │
-           ▼
-      Virtual Plane
-    ┌──────────────┐
-    │              │
-    │   🖐️        │
-    │              │
-    └──────────────┘
-           │
-           ▼
-       Screen XY
+### Global Hotkeys
+| Hotkey | Action |
+|--------|--------|
+| `Super+Alt+A` | **Emergency disable** (immediate stop) |
+| `Super+Alt+P` | Pause/Resume tracking |
+| `Super+Alt+C` | Calibrate |
+| `Super+Alt+S` | Open settings |
+| `Super+Alt+M` | Toggle precision mode |
 
-This creates the possibility of a more consistent 3D-aware pointing model.
-
----
-
-🛠️ Technology
-
-Layer| Technology
-Programming| Python
-Video| OpenCV
-Hand Tracking| MediaPipe
-Face Tracking| MediaPipe
-Input| Linux input / "uinput"
-Platform| Linux
-Primary Environment| Pop!_OS
+### Safety System
+- **Corner Escape** — Move cursor to any screen corner → emergency stop
+- **Velocity Limit** — Excessive cursor speed → pause
+- **Focus Loss** — Application loses focus → pause (configurable)
+- **Inactivity Timeout** — No hand detected for N seconds → pause
+- **Gesture Timeout** — Gesture held too long → release
 
 ---
 
-🚀 Quick Start
+## Quick Start
 
-1. Clone
+### Prerequisites
+- Linux (tested on Pop!_OS, Ubuntu, Fedora, Arch)
+- Python 3.10+
+- Webcam
+- **For Wayland**: `libwayland-client`, `wayland-protocols`, `ydotool` (optional)
+- **For X11**: `libx11`, `libxtst`
+- **For uinput**: User in `input` group (`sudo usermod -a -G input $USER`)
 
+### Installation
+
+```bash
+# 1. Clone
 git clone https://github.com/wrappingpine/RED.git
 cd RED
 
-2. Create environment
-
+# 2. Create environment
 python3 -m venv .venv
 source .venv/bin/activate
 
-3. Install dependencies
-
+# 3. Install dependencies
 pip install -r requirements.txt
+# Or with optional desktop integration extras:
+pip install -e .[wayland,x11,appindicator]
 
-4. Run RED
-
+# 4. Run
 ./run.sh
+```
 
-If the launcher isn't executable:
-
-chmod +x run.sh
-./run.sh
+### Model Files
+Download MediaPipe task models and place in project root:
+- `hand_landmarker.task` — [MediaPipe Hand Landmarker](https://developers.google.com/mediapipe/solutions/vision/hand_landmarker)
+- `face_landmarker.task` — [MediaPipe Face Landmarker](https://developers.google.com/mediapipe/solutions/vision/face_landmarker)
 
 ---
 
-🧪 Developer Mode
+## Configuration
 
-RED contains multiple testing and benchmarking utilities.
+RED uses a configuration system with sensible defaults. Key settings:
 
-Hand tracking
+```python
+# Cursor smoothing
+smoothing_algorithm: "one_euro"  # or "kalman", "ema", "none"
+min_cutoff: 1.0                  # OneEuroFilter minimum cutoff
+beta: 0.01                       # OneEuroFilter beta
 
-python test_hand_tracker.py
+# Gesture thresholds
+pinch_distance_threshold: 0.04   # Normalized distance for pinch
+pinch_hold_frames: 3             # Frames to confirm pinch
+gesture_cooldown: 0.5            # Seconds between gestures
 
-Coordinate mapping
+# Safety
+emergency_stop_corner: true      # Enable corner escape
+velocity_limit: 5000             # Max pixels/second
+inactivity_timeout: 300          # Seconds before auto-pause
 
-python test_mapping.py
-
-Head-relative tracking
-
-python test_head_relative.py
-
-General runtime test
-
-python test_run.py
-
-Performance benchmarks
-
-benchmark_face.py
-benchmark_full.py
-benchmark_image.py
-benchmark_video.py
-benchmark_video2.py
-
-These tools allow tracking and performance changes to be tested independently.
+# Tracking
+use_head_relative: true          # Enable 3D head-relative tracking
+virtual_plane_distance: 0.3      # Virtual plane distance (meters)
+```
 
 ---
 
-📂 Project Structure
+## Project Structure
 
+```
 RED/
-│
-├── airmouse/                 # Core application
-│
-├── hand_landmarker.task      # Hand tracking model
-├── face_landmarker.task      # Face tracking model
-│
-├── benchmark_*.py            # Performance benchmarks
-│
-├── test_*.py                 # Test suite
-│
-├── debug_observe_cursor.py   # Cursor debugging
-│
-├── cursor_observation.jsonl  # Cursor observations
-├── observation_output.txt    # Debug output
-│
-├── ARCHITECTURE_AUDIT.md     # Architecture notes
-│
-├── requirements.txt          # Python dependencies
-├── setup.py                  # Package configuration
-├── install.sh                # Installation helper
-└── run.sh                    # Launcher
+├── airmouse/                    # Core application package
+│   ├── camera/                  # Camera management (V4L2, health scoring)
+│   ├── control/                 # Main loop, cursor controller
+│   ├── input/                   # Linux input backends
+│   │   ├── linux_input.py       # Multi-backend LinuxInputManager
+│   │   └── uinput_mouse.py      # Legacy uinput direct access
+│   ├── ui/                      # Desktop integration
+│   │   ├── system_tray.py       # SystemTrayManager (AppIndicator3, SNI, Qt)
+│   │   ├── hotkeys.py           # GlobalHotkeyManager (X11, Portal, evdev)
+│   │   ├── safety.py            # SafetyManager (corner, velocity, focus, inactivity)
+│   │   └── main_window.py       # Qt GUI with tray integration
+│   ├── vision/                  # Computer vision pipeline
+│   │   ├── hand_tracker.py      # MediaPipe Hand Landmarker
+│   │   ├── face_tracker.py      # MediaPipe Face Landmarker
+│   │   ├── gestures.py          # GestureRecognizer + hysteresis FSMs
+│   │   ├── tracking_processor.py# Frame coordination, smoothing, prediction
+│   │   └── virtual_plane.py     # 3D head-relative coordinate system
+│   ├── brightness/              # Auto-brightness (backlight + IIO sensors)
+│   └── debug/                   # Performance monitoring
+├── hand_landmarker.task         # Hand tracking model (download separately)
+├── face_landmarker.task         # Face tracking model (download separately)
+├── benchmark_*.py               # Performance benchmarks
+├── test_*.py                    # Test suite (155 tests)
+├── requirements.txt             # Python dependencies
+├── setup.py                     # Package configuration
+├── install.sh                   # Installation helper
+└── run.sh                       # Launcher script
+```
 
 ---
 
-🧩 Architecture Philosophy
+## Development
 
-RED separates vision, interpretation, and input.
+### Running Tests
+```bash
+# All tests
+python3 -m pytest airmouse/tests/ -v
 
+# Specific test modules
+python3 -m pytest airmouse/tests/test_gesture_hysteresis.py -v
+python3 -m pytest airmouse/tests/test_full_pipeline.py -v
+```
+
+### Benchmarks
+```bash
+python3 benchmark_full.py       # Full pipeline benchmark
+python3 benchmark_video.py      # Video processing benchmark
+```
+
+### Debug Utilities
+```bash
+python3 test_hand_tracker_gui.py    # Hand/face preview with skeleton
+python3 debug_observe_cursor.py     # Cursor position logging
+```
+
+---
+
+## Architecture Philosophy
+
+RED separates **vision**, **interpretation**, and **input**:
+
+```
 ┌────────────────────────────────────┐
 │              RED                   │
 │                                    │
-│  Camera                            │
-│    ↓                               │
-│  Vision                            │
-│    ↓                               │
-│  Tracking                          │
-│    ↓                               │
-│  Spatial Mapping                   │
-│    ↓                               │
-│  Gesture Engine                    │
-│    ↓                               │
-│  Input Backend                     │
+│  Camera   →  Vision  →  Tracking   │
+│                ↓                   │
+│            Spatial Mapping         │
+│                ↓                   │
+│            Gesture Engine          │
+│                ↓                   │
+│            Input Backend           │
 │                                    │
 └────────────────────────────────────┘
+```
 
-This makes it possible to improve one subsystem without rewriting everything else.
-
-For example:
-
-Better hand model
-       ↓
-Same gesture engine
-       ↓
-Same input backend
+This modular design enables:
+- Swapping hand models without touching gesture logic
+- Testing input backends independently
+- Adding new desktop environments without vision changes
+- Benchmarking each subsystem in isolation
 
 ---
 
-🐧 Linux & Wayland
+## Roadmap
 
-RED is being developed Linux-first, with modern desktop environments in mind.
+### ✅ Completed (Core Tracking)
+- [x] Webcam input with V4L2 + format negotiation
+- [x] MediaPipe Hand + Face Landmarker integration
+- [x] Head-relative 3D coordinate system
+- [x] Virtual display plane with ray-plane intersection
+- [x] Adaptive smoothing (OneEuroFilter + VelocityLimiter)
+- [x] Kalman filter for predictive tracking
+- [x] Gesture hysteresis state machines
+- [x] Multi-backend Linux input (Wayland, ydotool, X11, uinput)
+- [x] System tray (AppIndicator3, SNI, Qt)
+- [x] Global hotkeys (X11, Portal, evdev)
+- [x] Safety system (corner, velocity, focus, inactivity)
+- [x] Auto-brightness control
 
-Particular attention is required for:
-
-- Wayland
-- pointer injection
-- "/dev/uinput"
-- permissions
-- compositor behavior
-- application focus
-- input security
-
-The vision pipeline is kept separate from the OS input layer so that different input backends can be explored without rebuilding the tracking system.
-
----
-
-📊 Development Status
-
-Computer Vision       █████████░  90%
-Hand Tracking         █████████░  90%
-Cursor Mapping        ████████░░  80%
-Gesture Engine        ███████░░░  70%
-Two-Hand Tracking     ██████░░░░  60%
-Wayland Integration   ██████░░░░  60%
-GUI                   ████░░░░░░  40%
-Calibration            ████░░░░░░  40%
-Production Polish     ███░░░░░░░  30%
-
-«These are development targets/estimates, not formal release guarantees.»
-
----
-
-🗺️ Roadmap
-
-🟢 Core Tracking
-
-- [x] Webcam input
-- [x] Hand landmark detection
-- [x] MediaPipe integration
-- [x] Basic cursor mapping
-- [x] Tracking tests
-- [x] Benchmark tooling
-
-🟡 Interaction
-
-- [ ] Better cursor coordination
-- [ ] Eliminate mirrored movement
-- [ ] Better smoothing
-- [ ] Dynamic sensitivity
-- [ ] Reliable pinch clicking
-- [ ] Gesture debouncing
+### 🟡 In Progress (Interaction Polish)
+- [ ] Better cursor coordination & jitter reduction
+- [ ] Eliminate mirrored movement issues
+- [ ] Dynamic sensitivity adjustment
+- [ ] Reliable pinch clicking with debouncing
 - [ ] Scroll gestures
 - [ ] Drag gestures
-- [ ] Right click
-- [ ] Custom gestures
+- [ ] Right-click gesture refinement
 
-🟠 Spatial Control
-
-- [x] Face tracking experiments
-- [x] Head-relative tracking experiments
+### 🟠 Planned (Spatial Control)
 - [ ] Improved virtual display mapping
 - [ ] Better depth estimation
-- [ ] Automatic calibration
+- [ ] Automatic calibration wizard
 
-🔵 Desktop Experience
-
-- [ ] Background mode
-- [ ] Global activation shortcut
+### 🔵 Planned (Desktop Experience)
+- [ ] Background/daemon mode
+- [ ] Systemd service installation
 - [ ] Minimal settings UI
-- [ ] Sensitivity controls
-- [ ] Gesture configuration
+- [ ] Sensitivity & gesture configuration UI
 - [ ] System startup integration
-- [ ] Better Wayland support
+- [ ] AppImage / .deb packaging
 
-🚀 Long-Term
-
-- [ ] Cross-platform input abstraction
-- [ ] Windows support
-- [ ] macOS support
+### 🚀 Long-Term
+- [ ] Cross-platform input abstraction (Windows, macOS)
 - [ ] Application-specific gestures
 - [ ] Accessibility features
 - [ ] Plugin architecture
@@ -443,125 +363,108 @@ Production Polish     ███░░░░░░░  30%
 
 ---
 
-🔐 Privacy First
+## Privacy First
 
-RED's core computer-vision pipeline is designed to run locally.
+RED runs **entirely locally**. Your camera feed never leaves your machine.
 
-Your camera feed does not need to be uploaded to a cloud computer-vision service for hand tracking.
-
+```
 📷 Camera
    │
    ▼
 💻 Your Computer
    │
    ▼
-🧠 Vision Processing
+🧠 Vision Processing (MediaPipe)
    │
    ▼
-🖱️ Input
+🖱️ Input Events
+```
 
-Your camera. Your machine. Your data.
-
----
-
-💻 Hardware
-
-RED is intentionally designed to work with ordinary hardware.
-
-Minimum concept
-
-💻 Computer
-+
-📷 Webcam
-
-No specialized motion controller is required.
-
-Performance will depend on:
-
-- CPU
-- camera resolution
-- camera FPS
-- lighting
-- number of tracking models
-- desktop environment
-- tracking configuration
+No cloud services. No telemetry. Your data stays yours.
 
 ---
 
-🤝 Contributing
+## Hardware Requirements
 
-RED is an evolving open-source project.
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| CPU | 2 cores, 2.0 GHz | 4+ cores, 3.0 GHz |
+| RAM | 4 GB | 8 GB |
+| Camera | 720p @ 30 FPS | 1080p @ 60 FPS |
+| GPU | Integrated | Discrete (for MediaPipe GPU delegate) |
+| Linux Kernel | 5.10+ | 6.0+ (better uinput/Wayland support) |
 
-Contributions are especially useful in:
+Performance depends on: CPU, camera resolution/FPS, lighting, desktop environment, tracking configuration.
 
-- 👁️ Computer vision
-- 🖐️ Hand tracking
-- 🧠 Gesture recognition
-- 📐 Spatial mathematics
-- 🐧 Linux input
-- 🌊 Wayland
+---
+
+## Contributing
+
+Contributions welcome in:
+- 👁️ Computer vision & MediaPipe optimization
+- 🖐️ Hand/face tracking improvements
+- 🧠 Gesture recognition & hysteresis tuning
+- 📐 Spatial mathematics & coordinate mapping
+- 🐧 Linux input systems (Wayland, X11, uinput, ydotool)
+- 🌊 Wayland protocol expertise
 - ⚡ Performance optimization
-- 🎨 UI/UX
-- 🧪 Testing
+- 🎨 UI/UX design
+- 🧪 Testing & CI/CD
 - 📚 Documentation
 
-If you're planning a significant architectural change, open an issue first so the approach can be discussed.
+> For significant architectural changes, please open an issue first to discuss the approach.
 
 ---
 
-🐛 Found a Bug?
+## Bug Reports
 
 Please include:
+- **OS / Distribution:**
+- **Desktop Environment:** (GNOME, KDE, Sway, Hyprland, etc.)
+- **Session Type:** (Wayland / X11)
+- **Python Version:**
+- **Camera Model:**
+- **RED Commit/Version:**
 
-OS:
-Desktop Environment:
-Python:
-Camera:
-RED commit/version:
+**What happened:**
+**What you expected:**
+**Steps to reproduce:**
+**Error logs / terminal output:**
 
-What happened:
-
-What you expected:
-
-Steps to reproduce:
-
-Error / logs:
-
-For tracking problems, a short screen recording or debug output can make diagnosis much easier.
+For tracking issues, a short screen recording or debug output (`python3 debug_observe_cursor.py`) helps immensely.
 
 ---
 
-🌟 Why RED?
+## Why RED?
 
 Most computer interfaces assume:
-
+```
 Hand → Physical Mouse → Computer
+```
 
 RED explores:
-
+```
 Hand → Camera → Computer
+```
 
-The objective isn't to replace every mouse.
-
-It's to make hands-free interaction practical.
-
----
-
-🖐️ Point
-
-🤏 Gesture
-
-🖥️ Control
+The objective isn't to replace every mouse. It's to make **hands-free interaction practical** — for accessibility, presentations, VR/AR adjacency, or simply a different way to work.
 
 ---
 
-<p align="center">RED
+## License
 
-A camera. A hand. A new way to interact.
+MIT License — see [LICENSE](LICENSE) for details.
 
-<br><a href="https://github.com/wrappingpine/RED">
-  ⭐ Star the project on GitHub
-</a></p>---
+---
+
+<p align="center">
+  <strong>RED</strong><br>
+  A camera. A hand. A new way to interact.
+  <br><br>
+  <a href="https://github.com/wrappingpine/RED">
+    ⭐ Star the project on GitHub
+  </a>
+</p>
 
 <p align="center">
   Made with 🖐️ and 🧠
