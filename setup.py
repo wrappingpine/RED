@@ -14,6 +14,8 @@ requirements = [
     "PySide6>=6.5.0",
     "tomli>=2.0.0; python_version < '3.11'",
     "tomli-w>=1.0.0",
+    "psutil>=5.9.0",
+    "pynput>=1.7.0",
 ]
 
 setup(
@@ -36,6 +38,17 @@ setup(
             "black>=23.0.0",
             "ruff>=0.1.0",
             "mypy>=1.0.0",
+        ],
+        "wayland": [
+            "python-evdev>=1.6.0",
+            "dbus-python>=1.3.0",
+            "pygobject>=3.44.0",
+        ],
+        "x11": [
+            "python3-xlib>=0.33",
+        ],
+        "appindicator": [
+            "gir1.2-ayatanaappindicator3-0.1",
         ],
     },
     entry_points={

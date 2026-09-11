@@ -34,9 +34,18 @@ from ..camera.manager import CameraSettings
 from ..vision.hand_tracker import HandTrackerSettings, Hand
 from ..vision.gestures import GestureConfig, GestureEvent, GestureType
 from ..control.cursor import CursorConfig, SmoothingAlgorithm
-from ..input.uinput_mouse import UInputDeviceConfig
+from ..input import UInputDeviceConfig
 from ..control.main_loop import (
     AirMouseController, AirMouseConfig, AirMouseState, PerformanceStats
+)
+from .system_tray import (
+    SystemTrayManager, TrayBackend, TrayMenuItem, create_airmouse_tray_menu
+)
+from .hotkeys import (
+    GlobalHotkeyManager, Hotkey, HotkeyBackend, KeyModifier, KeyCode
+)
+from .safety import (
+    SafetyManager, SafetyConfig, SafetyTrigger, SafetyLevel, SafetyEvent, DEFAULT_SAFETY_CONFIG
 )
 
 logger = logging.getLogger(__name__)
@@ -931,43 +940,39 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("Ready")
 
     def _setup_tray(self):
-        """Setup system tray icon."""
-        if not QSystemTrayIcon.isSystemTrayAvailable():
-            logger.warning("System tray not available")
-            return
+        """Setup system tray using SystemTrayManager."""
+        try:
+            # Create tray manager with AppIndicator3 backend (best for Linux)
+            self._tray_manager = SystemTrayManager(backend=TrayBackend.APPI_INDICATOR)
 
-        self.tray_icon = QSystemTrayIcon(self)
-        # Use standard icon
-        self.tray_icon.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+            # Create menu items
+            menu_items = create_airmouse_tray_menu(
+                on_show=self.show,
+                on_start=self._on_start,
+                on_pause=self._on_pause,
+                on_stop=self._on_stop,
+                on_quit=QApplication.quit,
+                on_settings=self._show_settings,
+                on_calibrate=self._on_calibrate,
+            )
 
-        # Tray menu
-        tray_menu = QMenu()
+            # Create and show tray
+            if self._tray_manager.create("Air Mouse", menu_items):
+                self._tray_manager.show()
+                logger.info(f"System tray created with backend: {self._tray_manager.get_backend().value}")
+            else:
+                logger.warning("Failed to create system tray with AppIndicator3, trying Qt fallback")
+                self._tray_manager = SystemTrayManager(backend=TrayBackend.QSYSTEM_TRAY)
+                if self._tray_manager.create("Air Mouse", menu_items):
+                    self._tray_manager.show()
+                    logger.info("System tray created with Qt fallback")
+                else:
+                    logger.warning("System tray not available")
+                    self._tray_manager = None
 
-        show_action = QAction("Show", self)
-        show_action.triggered.connect(self.show)
-        tray_menu.addAction(show_action)
-
-        self.tray_start_action = QAction("Start", self)
-        self.tray_start_action.triggered.connect(self._on_start)
-        tray_menu.addAction(self.tray_start_action)
-
-        self.tray_pause_action = QAction("Pause", self)
-        self.tray_pause_action.triggered.connect(self._on_pause)
-        tray_menu.addAction(self.tray_pause_action)
-
-        self.tray_stop_action = QAction("Stop", self)
-        self.tray_stop_action.triggered.connect(self._on_stop)
-        tray_menu.addAction(self.tray_stop_action)
-
-        tray_menu.addSeparator()
-
-        quit_action = QAction("Quit", self)
-        quit_action.triggered.connect(QApplication.quit)
-        tray_menu.addAction(quit_action)
-
-        self.tray_icon.setContextMenu(tray_menu)
-        self.tray_icon.activated.connect(self._on_tray_activated)
-        self.tray_icon.show()
+        except Exception as e:
+            logger.warning(f"Failed to setup system tray: {e}")
+            self._tray_manager = None
 
     def _setup_controller(self):
         """Create and configure air mouse controller."""
@@ -1104,41 +1109,33 @@ class MainWindow(QMainWindow):
 
     def _update_tray_actions(self, state: AirMouseState):
         """Update tray menu actions based on state."""
-        if not self.tray_icon:
-            return
-
-        if state == AirMouseState.RUNNING:
-            self.tray_start_action.setEnabled(False)
-            self.tray_pause_action.setEnabled(True)
-            self.tray_pause_action.setText("Pause")
-            self.tray_stop_action.setEnabled(True)
-        elif state == AirMouseState.PAUSED:
-            self.tray_start_action.setEnabled(False)
-            self.tray_pause_action.setEnabled(True)
-            self.tray_pause_action.setText("Resume")
-            self.tray_stop_action.setEnabled(True)
-        else:
-            self.tray_start_action.setEnabled(True)
-            self.tray_pause_action.setEnabled(False)
-            self.tray_pause_action.setText("Pause")
-            self.tray_stop_action.setEnabled(False)
-
-    def _on_tray_activated(self, reason):
-        """Handle tray icon activation."""
-        if reason == QSystemTrayIcon.DoubleClick:
-            self.show()
-            self.raise_()
-            self.activateWindow()
+        # The SystemTrayManager handles its own menu updates
+        # This is kept for compatibility with the Qt tray if used
+        if self._tray_manager and hasattr(self, 'tray_start_action'):
+            if state == AirMouseState.RUNNING:
+                self.tray_start_action.setEnabled(False)
+                self.tray_pause_action.setEnabled(True)
+                self.tray_pause_action.setText("Pause")
+                self.tray_stop_action.setEnabled(True)
+            elif state == AirMouseState.PAUSED:
+                self.tray_start_action.setEnabled(False)
+                self.tray_pause_action.setEnabled(True)
+                self.tray_pause_action.setText("Resume")
+                self.tray_stop_action.setEnabled(True)
+            else:
+                self.tray_start_action.setEnabled(True)
+                self.tray_pause_action.setEnabled(False)
+                self.tray_pause_action.setText("Pause")
+                self.tray_stop_action.setEnabled(False)
 
     def closeEvent(self, event: QCloseEvent):
         """Handle window close - minimize to tray."""
-        if self.tray_icon and self.tray_icon.isVisible():
+        if self._tray_manager and self._tray_manager.is_visible():
             self.hide()
             event.ignore()
-            self.tray_icon.showMessage(
+            self._tray_manager.show_message(
                 "Air Mouse",
                 "Application minimized to tray. Double-click to restore.",
-                QSystemTrayIcon.Information,
                 2000
             )
         else:

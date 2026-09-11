@@ -16,7 +16,7 @@ from airmouse.control.cursor import CursorConfig
 from airmouse.camera.manager import CameraSettings
 from airmouse.vision.hand_tracker import HandTrackerSettings
 from airmouse.vision.face_tracker import FaceTrackerSettings
-from airmouse.input.uinput_mouse import UInputDeviceConfig
+from airmouse.input import UInputDeviceConfig, LinuxInputManager
 
 
 class TestFullPipeline:
@@ -29,7 +29,7 @@ class TestFullPipeline:
         self.config.camera = CameraSettings(device_index=0, width=640, height=480, fps=30)
         self.config.hand_tracker = HandTrackerSettings(max_hands=2)
         self.config.face_tracker = FaceTrackerSettings()
-        self.config.virtual_mouse = UInputDeviceConfig(name="Air Mouse Test")
+        # self.config.virtual_mouse = UInputDeviceConfig(name="Air Mouse Test")
 
     def test_controller_initialization(self):
         """Test controller initializes all components after start."""
@@ -41,7 +41,7 @@ class TestFullPipeline:
         assert controller.tracking_processor is None
         assert controller.cursor_controller is None
         assert controller.gesture_recognizer is None
-        assert controller.virtual_mouse is None
+        assert controller.input_manager is None
 
     def test_controller_start_stop(self):
         """Test controller start/stop cycle."""
@@ -76,8 +76,8 @@ class TestFullPipeline:
     @patch('airmouse.camera.manager.CameraManager.read_frame')
     @patch('airmouse.control.main_loop.HandTracker')
     @patch('airmouse.control.main_loop.FaceTracker')
-    @patch('airmouse.control.main_loop.VirtualMouse')
-    def test_processing_loop_mock(self, mock_virtual_mouse, mock_face_tracker, mock_hand_tracker, mock_read_frame, mock_open_camera):
+    @patch('airmouse.control.main_loop.LinuxInputManager')
+    def test_processing_loop_mock(self, mock_input_manager, mock_face_tracker, mock_hand_tracker, mock_read_frame, mock_open_camera):
         """Test processing loop with mocked camera."""
         # Mock camera
         mock_open_camera.return_value = True
@@ -93,10 +93,10 @@ class TestFullPipeline:
         mock_face_instance.process = Mock(return_value=[])
         mock_face_tracker.return_value = mock_face_instance
 
-        # Mock virtual mouse
-        mock_mouse_instance = Mock()
-        mock_mouse_instance.create = Mock(return_value=True)
-        mock_virtual_mouse.return_value = mock_mouse_instance
+        # Mock input manager
+        mock_input_instance = Mock()
+        mock_input_instance.initialize = Mock(return_value=True)
+        mock_input_manager.return_value = mock_input_instance
 
         controller = AirMouseController(self.config, lambda s, d: None)
 
