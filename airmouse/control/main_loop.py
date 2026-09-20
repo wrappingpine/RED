@@ -30,6 +30,7 @@ from ..vision.gestures import (
     GestureRecognizer, GestureConfig, GestureEvent, GestureType, TrackingState
 )
 from ..vision.tracking_processor import TrackingProcessor, TrackingConfig, TrackedHand
+from ..vision.tracking_status import TrackingStatus, TrackingPhase, LostReason, ConfidenceState
 from ..input import LinuxInputManager, InputBackend, UInputDeviceConfig
 from .cursor import CursorController, CursorConfig, SmoothingAlgorithm, get_screen_size, SensitivityMode
 from ..debug.performance_monitor import PerformanceMonitor
@@ -359,6 +360,10 @@ class AirMouseController:
         # Safety manager
         self._safety_manager = None
 
+        # Tracking status (confidence + loss detection per spec §16-18)
+        self._tracking_status = TrackingStatus()
+        self.on_tracking_status_change: Optional[Callable[[dict], None]] = None
+
     def initialize(self) -> bool:
         """Initialize all components."""
         logger.info("Initializing Air Mouse...")
@@ -467,6 +472,13 @@ class AirMouseController:
 
         # Setup safety manager
         self._setup_safety()
+
+        # Setup tracking status callbacks
+        self._tracking_status.set_callbacks(
+            on_lost=lambda reason: self._on_tracking_lost(reason),
+            on_recovered=lambda: self._on_tracking_recovered(),
+            on_phase_change=lambda old, new: self._on_tracking_phase_change(old, new)
+        )
 
         self._running = True
         self._stop_event.clear()
@@ -623,6 +635,54 @@ class AirMouseController:
             logger.info("Air Mouse resumed")
             self._set_status("resumed", {})
 
+    def _on_tracking_lost(self, reason: LostReason):
+        """Callback when tracking is lost - freeze everything per spec §17."""
+        # Freeze pointer - stop all movement
+        if self.cursor_controller:
+            self.cursor_controller.set_active(False)
+        
+        # Release all buttons
+        if self.input_manager:
+            self.input_manager.release_all()
+        
+        # Stop gesture recognition
+        if self.gesture_recognizer:
+            self.gesture_recognizer.reset()
+        
+        # Update status
+        self._set_status("tracking_lost", {
+            "reason": reason.name,
+            "confidence": self._tracking_status.confidence.confidence_value
+        })
+        
+        logger.warning(f"Tracking lost - all input frozen: {reason.name}")
+
+    def _on_tracking_recovered(self):
+        """Callback when tracking is recovered - reset and resume per §18."""
+        # Reset frozen state
+        if self.cursor_controller:
+            self.cursor_controller.set_active(True)
+        
+        # Release any held buttons
+        if self.input_manager:
+            self.input_manager.release_all()
+        
+        # Reset gesture recognizer
+        if self.gesture_recognizer:
+            self.gesture_recognizer.reset()
+        
+        # Update status
+        self._set_status("tracking_recovered", {})
+        
+        logger.info("Tracking recovered - input resumed")
+
+    def _on_tracking_phase_change(self, old: TrackingPhase, new: TrackingPhase):
+        """Callback when tracking phase changes."""
+        self._set_status("tracking_phase", {
+            "old": old.name,
+            "new": new.name
+        })
+
     def _run_loop(self):
         """Main processing loop with frame coordination."""
         frame_interval = 1.0 / self.config.target_fps
@@ -719,7 +779,7 @@ class AirMouseController:
         self.performance_monitor.update_tracking(tracking_time)
 
         if not tracking_result or tracking_result.tracking_state == TrackingState.NO_HAND:
-            # No valid tracked hand - release all buttons
+            # No valid tracked hand - release all buttons and freeze
             if self.input_manager:
                 self.input_manager.release_all()
             if self.cursor_controller:
@@ -728,6 +788,17 @@ class AirMouseController:
                 self.gesture_recognizer.reset()
             if self.tracking_processor:
                 self.tracking_processor.reset()
+            
+            # Update tracking status - hand lost
+            if hands:
+                # Hands detected but confidence too low
+                max_conf = max((h.confidence for h in hands), default=0.0)
+                if max_conf < 0.4:
+                    self._tracking_status.record_hand_lost(LostReason.CONFIDENCE_DROP,
+                                                           f"confidence={max_conf:.2f}")
+            else:
+                self._tracking_status.record_hand_lost(LostReason.NO_HAND_DETECTED)
+            
             frame_data.tracking_state = TrackingState.NO_HAND
             return
 
@@ -763,6 +834,16 @@ class AirMouseController:
 
         # Gesture recognition using tracked hands
         gesture_start = time.time()
+        
+        # Check confidence-based permissions per spec §53
+        conf_state = self._tracking_status.confidence.state
+        can_gesture = self._tracking_status.get_gesture_permission()
+        
+        if not can_gesture:
+            # Per §53: high-risk actions require higher confidence
+            logger.debug(f"Gesture blocked: confidence state={conf_state.name}")
+            # Still call recognizer to maintain state machine, but we won't act on events
+        
         events = self.gesture_recognizer.process(tracked_hands)
         gesture_time = (time.time() - gesture_start) * 1000
         self.stats.gesture_time_ms = gesture_time
@@ -770,6 +851,21 @@ class AirMouseController:
         self.performance_monitor.update_gesture(gesture_time)
 
         frame_data.gesture_events = events
+        
+        # Apply confidence-based filtering to events per §53
+        if not can_gesture:
+            # Filter out all gesture events when confidence is low
+            filtered_events = []
+            for event in events:
+                if event.gesture_type in (GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                                          GestureType.DRAG_START, GestureType.DRAG_END,
+                                          GestureType.SCROLL_UP, GestureType.SCROLL_DOWN,
+                                          GestureType.PAUSE_TRACKING):
+                    # Skip high-risk gestures when confidence is low
+                    continue
+                filtered_events.append(event)
+            events = filtered_events
+            frame_data.gesture_events = events
 
         # Process gestures and move mouse
         mouse_start = time.time()
