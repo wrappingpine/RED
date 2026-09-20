@@ -60,6 +60,11 @@ class CursorConfig:
     # Acceleration curve: 1.0 = linear, >1.0 = accelerated
     acceleration: float = 1.2
 
+    # Maximum cursor velocity (pixels per second) per §24
+    # Prevents runaway cursor when hand moves suddenly
+    max_velocity: int = 2000             # pixels/sec (benchmark: comfortable for 1080p)
+    max_velocity_precision: int = 500    # pixels/sec in precision mode
+
     # Smoothing algorithm
     smoothing: SmoothingAlgorithm = SmoothingAlgorithm.ONE_EURO
 
@@ -77,6 +82,13 @@ class CursorConfig:
 
     # Use index finger tip (True) or palm center (False) as cursor point
     use_index_tip: bool = True
+
+    # Multi-monitor support (§25)
+    monitor_count: int = 1               # Number of active monitors
+    monitor_arrangement: str = "horizontal"  # "horizontal" or "grid"
+    primary_monitor: int = 0             # Index of primary monitor
+    virtual_desktop_width: int = 0       # 0 = use sum of monitors
+    virtual_desktop_height: int = 0
 
     @property
     def effective_sensitivity(self) -> float:
@@ -213,6 +225,25 @@ class CursorController:
         self._camera_width = width
         self._camera_height = height
 
+    def _clamp_velocity(self, dx: float, dy: float, dt: float) -> Tuple[float, float]:
+        """Clamp movement to max_velocity (pixels/sec) per §24."""
+        if dt <= 0:
+            return (dx, dy)
+
+        # Determine max velocity based on sensitivity mode
+        if self.config.sensitivity_mode == SensitivityMode.PRECISION:
+            max_vel = self.config.max_velocity_precision
+        else:
+            max_vel = self.config.max_velocity
+
+        max_dist = max_vel * dt  # Max pixels allowed in this frame
+
+        distance = math.sqrt(dx * dx + dy * dy)
+        if distance > max_dist:
+            scale = max_dist / distance
+            return (dx * scale, dy * scale)
+        return (dx, dy)
+
     def _normalize_to_screen(self, x_norm: float, y_norm: float) -> Tuple[float, float]:
         """Convert normalized coordinates (0-1) to screen pixels."""
         # Apply inversion if needed
@@ -221,9 +252,15 @@ class CursorController:
         if self.config.invert_y:
             y_norm = 1.0 - y_norm
 
-        # Map to screen
-        screen_x = x_norm * self._screen_width
-        screen_y = y_norm * self._screen_height
+        # Map to virtual desktop coordinates (supports multi-monitor §25)
+        if self.config.monitor_count > 1:
+            vw = self.config.virtual_desktop_width or (self.config.screen_width * self.config.monitor_count)
+            vh = self.config.virtual_desktop_height or self.config.screen_height
+            screen_x = x_norm * vw
+            screen_y = y_norm * vh
+        else:
+            screen_x = x_norm * self._screen_width
+            screen_y = y_norm * self._screen_height
 
         # Clamp to screen bounds
         screen_x = max(0, min(self._screen_width - 1, screen_x))
@@ -362,9 +399,12 @@ class CursorController:
         Returns:
             (dx, dy) relative movement in screen pixels for uinput, or None
         """
+        current_time = time.time()
+
         # Initialize reference point on first frame
         if self._reference_point is None:
             self._reference_point = (x_norm, y_norm)
+            self._last_time = current_time
             return (0, 0)  # No movement on first frame
 
         # Calculate delta from reference point
@@ -381,11 +421,15 @@ class CursorController:
         dx, dy = self._apply_acceleration(dx, dy)
 
         # Convert normalized movement to screen pixels
-        # Normalized plane coords [0,1] map to screen dimensions
-        screen_dx = int(dx * self._screen_width)
-        screen_dy = int(dy * self._screen_height)
+        screen_dx = dx * self._screen_width
+        screen_dy = dy * self._screen_height
 
-        return (screen_dx, screen_dy)
+        # Clamp velocity per §24
+        dt = current_time - self._last_time if self._last_time else 0.016
+        screen_dx, screen_dy = self._clamp_velocity(screen_dx, screen_dy, dt)
+
+        self._last_time = current_time
+        return (int(screen_dx), int(screen_dy))
 
     def reset(self):
         """Reset controller state."""
