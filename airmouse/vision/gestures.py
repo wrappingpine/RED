@@ -139,16 +139,17 @@ class GestureConfig:
     preferred_handedness: str = "Right"  # "Right" or "Left"
 
     # === Clutch / Hand Repositioning (§55) ===
-    # Clutch gesture: temporarily disable cursor control for hand repositioning
-    # Trigger: specific gesture (e.g., fist + open palm combo or thumb gesture)
     clutch_enabled: bool = True
     clutch_trigger_gesture: str = "thumb"  # "thumb", "fist_open_palm", "custom"
     clutch_timeout: float = 3.0            # max seconds clutch can stay active (benchmark: 3s)
     clutch_reacquire_threshold: float = 0.05  # hand movement to auto-release (benchmark: 5% screen)
 
     # === Conflict resolution (§34) ===
-    # Whether to enable deterministic conflict resolution
     conflict_resolution: bool = True
+
+    # === Interaction Modes (§56) ===
+    gesture_mode: bool = False
+    paused_mode: bool = False
 
 
 class GesturePhase(Enum):
