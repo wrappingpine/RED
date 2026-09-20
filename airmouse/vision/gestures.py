@@ -147,6 +147,16 @@ class GestureConfig:
     # === Conflict resolution (§34) ===
     conflict_resolution: bool = True
 
+    # === Adaptive Learning (§59-60) ===
+    # Adaptive sensitivity based on user behavior
+    # Track velocity and jitter statistics
+    adaptive_learning: bool = True
+    # Velocity tracking window (frames)
+    velocity_window_frames: int = 30
+    # Max sensitivity adjustment factor
+    adaptive_max_factor: float = 1.5
+    adaptive_min_factor: float = 0.5
+
     # === Interaction Modes (§56) ===
     gesture_mode: bool = False
     paused_mode: bool = False
@@ -232,6 +242,12 @@ class GestureState:
         self.clutch_active = False
         self.clutch_start_time = 0.0
         self.clutch_start_pos = None
+
+        # Adaptive Learning (§59-60)
+        self.adaptive_velocity_samples: List[float] = []
+        self.adaptive_jitter_samples: List[float] = []
+        self.adaptive_current_factor: float = 1.0
+        self.adaptive_frame_count: int = 0
 
         # General
         self.last_gesture_time = 0.0
