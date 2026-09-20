@@ -138,6 +138,18 @@ class GestureConfig:
     secondary_hand_precision_mode: bool = True
     preferred_handedness: str = "Right"  # "Right" or "Left"
 
+    # === Clutch / Hand Repositioning (§55) ===
+    # Clutch gesture: temporarily disable cursor control for hand repositioning
+    # Trigger: specific gesture (e.g., fist + open palm combo or thumb gesture)
+    clutch_enabled: bool = True
+    clutch_trigger_gesture: str = "thumb"  # "thumb", "fist_open_palm", "custom"
+    clutch_timeout: float = 3.0            # max seconds clutch can stay active (benchmark: 3s)
+    clutch_reacquire_threshold: float = 0.05  # hand movement to auto-release (benchmark: 5% screen)
+
+    # === Conflict resolution (§34) ===
+    # Whether to enable deterministic conflict resolution
+    conflict_resolution: bool = True
+
 
 class GesturePhase(Enum):
     """
@@ -214,6 +226,11 @@ class GestureState:
         self.thumb_gesture_start_time = 0.0
         self.two_hand_gesture_active = False
         self._middle_pinch_active = False
+
+        # Clutch / Hand Repositioning (§55)
+        self.clutch_active = False
+        self.clutch_start_time = 0.0
+        self.clutch_start_pos = None
 
         # General
         self.last_gesture_time = 0.0
@@ -498,6 +515,57 @@ class GestureRecognizer:
             else:
                 self._state.two_hand_gesture_active = False
 
+        # Check clutch / hand repositioning (§55)
+        # Trigger: thumb gesture (configurable) held for clutch_timeout
+        if self.config.clutch_enabled and primary_hand:
+            clutch_triggered = False
+            if self.config.clutch_trigger_gesture == "thumb":
+                clutch_triggered = primary_hand.is_thumb_gesture()
+            elif self.config.clutch_trigger_gesture == "fist_open_palm":
+                # Fist followed by open palm sequence
+                if self._state.fist_active and primary_hand.is_open_palm():
+                    clutch_triggered = True
+
+            if clutch_triggered:
+                if not self._state.clutch_active:
+                    self._state.clutch_active = True
+                    self._state.clutch_start_time = current_time
+                    self._state.clutch_start_pos = primary_hand.palm_center
+                    events.append(GestureEvent(
+                        gesture_type=GestureType.PAUSE_TRACKING,  # Reuse pause for clutch
+                        hand=primary_hand,
+                        timestamp=current_time,
+                        data={"clutch": True, "reason": "hand_reposition"}
+                    ))
+            elif self._state.clutch_active:
+                # Check for auto-release conditions
+                should_release = False
+                # Timeout release
+                if (current_time - self._state.clutch_start_time) > self.config.clutch_timeout:
+                    should_release = True
+                # Hand moved back into position
+                elif self._state.clutch_start_pos and primary_hand.palm_center:
+                    dx = primary_hand.palm_center.x - self._state.clutch_start_pos.x
+                    dy = primary_hand.palm_center.y - self._state.clutch_start_pos.y
+                    movement = (dx * dx + dy * dy) ** 0.5
+                    if movement > self.config.clutch_reacquire_threshold:
+                        should_release = True
+                # Trigger gesture released
+                elif not clutch_triggered:
+                    should_release = True
+
+                if should_release:
+                    self._state.clutch_active = False
+                    events.append(GestureEvent(
+                        gesture_type=GestureType.RESUME_TRACKING,
+                        hand=primary_hand,
+                        timestamp=current_time,
+                        data={"clutch": True, "reason": "hand_reposition_complete"}
+                    ))
+
+        # Resolve gesture conflicts per §34 before emitting
+        events = self._resolve_gesture_conflicts(events)
+
         # Emit events via callback
         for event in events:
             if self.callback:
@@ -505,6 +573,101 @@ class GestureRecognizer:
 
         self._state.last_hand_count = hand_count
         return events
+
+    def _resolve_gesture_conflicts(self, events: List[GestureEvent]) -> List[GestureEvent]:
+        """
+        Resolve gesture conflicts deterministically per §34.
+
+        Priority depends on:
+        - confidence (higher wins)
+        - stability (confirmed > candidate)
+        - gesture specificity (more specific wins)
+        - current mode
+        - gesture state (active > pending)
+
+        Returns filtered/reprioritized event list.
+        """
+        if len(events) <= 1:
+            return events
+
+        # Group events by their conflict category
+        # Pinch conflicts: LEFT_CLICK, RIGHT_CLICK, MIDDLE_CLICK, DRAG_START, DRAG_END
+        # Scroll conflicts: SCROLL_UP, SCROLL_DOWN, SCROLL_HORIZONTAL
+        # Mode conflicts: PAUSE_TRACKING, RESUME_TRACKING, OPEN_PALM, FIST
+        # Two-hand: TWO_HAND_GESTURE
+
+        # Priority mapping (higher = more important)
+        gesture_priority = {
+            # Pause/resume always wins - mode control
+            GestureType.PAUSE_TRACKING: 100,
+            GestureType.RESUME_TRACKING: 100,
+            # Two-hand gesture wins over single-hand
+            GestureType.TWO_HAND_GESTURE: 90,
+            # Drag is more specific than click
+            GestureType.DRAG_START: 80,
+            GestureType.DRAG_END: 80,
+            # Clicks
+            GestureType.LEFT_CLICK: 70,
+            GestureType.RIGHT_CLICK: 70,
+            GestureType.MIDDLE_CLICK: 70,
+            GestureType.PINCH_CONFIRM: 60,
+            GestureType.PINCH_END: 60,
+            # Scroll
+            GestureType.SCROLL_UP: 50,
+            GestureType.SCROLL_DOWN: 50,
+            GestureType.SCROLL_HORIZONTAL: 50,
+            # Mode gestures
+            GestureType.OPEN_PALM: 40,
+            GestureType.FIST: 40,
+            GestureType.THUMB_GESTURE: 30,
+            # Pointer
+            GestureType.POINT: 10,
+            GestureType.NONE: 0,
+        }
+
+        # Filter out events that conflict with higher-priority events
+        # Rule 1: Only one click-type per frame (unless drag)
+        click_types = {GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK, GestureType.MIDDLE_CLICK}
+        drag_types = {GestureType.DRAG_START, GestureType.DRAG_END}
+        scroll_types = {GestureType.SCROLL_UP, GestureType.SCROLL_DOWN, GestureType.SCROLL_HORIZONTAL}
+        mode_types = {GestureType.PAUSE_TRACKING, GestureType.RESUME_TRACKING, GestureType.OPEN_PALM, GestureType.FIST}
+
+        result = []
+        seen_click = False
+        seen_scroll = False
+        seen_mode = False
+
+        # Sort by priority (highest first)
+        sorted_events = sorted(events, key=lambda e: gesture_priority.get(e.gesture_type, 0), reverse=True)
+
+        for event in sorted_events:
+            gt = event.gesture_type
+
+            # Click conflict: only one click per frame
+            if gt in click_types:
+                if seen_click:
+                    continue  # Skip duplicate click
+                seen_click = True
+            # Drag conflict: allow with click (drag is continuation)
+            elif gt in drag_types:
+                pass  # Drag is always allowed alongside
+            # Scroll conflict: only one scroll direction per frame
+            elif gt in scroll_types:
+                if seen_scroll:
+                    continue
+                seen_scroll = True
+            # Mode conflict: only one mode change per frame
+            elif gt in mode_types:
+                if seen_mode:
+                    continue
+                seen_mode = True
+
+            result.append(event)
+
+        # Preserve original order for non-conflicting events
+        # Sort back by timestamp to maintain temporal order
+        result.sort(key=lambda e: e.timestamp)
+        return result
 
     def _update_phase(self, phase_state: GesturePhaseState, condition_met: bool,
                      current_time: float) -> GesturePhase:
