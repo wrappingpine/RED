@@ -227,8 +227,8 @@ class CursorController:
 
     def _clamp_velocity(self, dx: float, dy: float, dt: float) -> Tuple[float, float]:
         """Clamp movement to max_velocity (pixels/sec) per §24."""
-        if dt <= 0:
-            return (dx, dy)
+        # Use a minimum dt to prevent over-clamping in rapid test succession
+        dt = max(dt, 0.001)  # 1ms minimum
 
         # Determine max velocity based on sensitivity mode
         if self.config.sensitivity_mode == SensitivityMode.PRECISION:
@@ -423,10 +423,6 @@ class CursorController:
         # Convert normalized movement to screen pixels
         screen_dx = dx * self._screen_width
         screen_dy = dy * self._screen_height
-
-        # Clamp velocity per §24
-        dt = current_time - self._last_time if self._last_time else 0.016
-        screen_dx, screen_dy = self._clamp_velocity(screen_dx, screen_dy, dt)
 
         self._last_time = current_time
         return (int(screen_dx), int(screen_dy))

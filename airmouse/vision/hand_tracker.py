@@ -203,6 +203,22 @@ class Hand:
                 not self._finger_states.get("ring", False) and
                 not self._finger_states.get("pinky", False))
 
+    def is_open_palm(self) -> bool:
+        """Check if hand is open palm (all fingers extended)."""
+        if not self._finger_states:
+            return False
+        return all(self._finger_states.values())
+
+    def is_thumb_gesture(self) -> bool:
+        """Check if hand is making thumb gesture (thumb extended, others folded)."""
+        if not self._finger_states:
+            return False
+        return (self._finger_states.get("thumb", False) and
+                not self._finger_states.get("index", False) and
+                not self._finger_states.get("middle", False) and
+                not self._finger_states.get("ring", False) and
+                not self._finger_states.get("pinky", False))
+
     def get_bounding_box(self) -> Tuple[float, float, float, float]:
         """Get normalized bounding box (x_min, y_min, x_max, y_max)."""
         if not self.landmarks:

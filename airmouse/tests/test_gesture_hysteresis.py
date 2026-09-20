@@ -74,7 +74,7 @@ class TestGestureConfig:
         assert config.pinch_release_threshold == 0.070
         assert config.drag_hold_time == 0.2
         assert config.fist_hold_time == 0.5
-        assert config.scroll_sensitivity == 1.0
+        assert config.scroll_sensitivity == 0.002  # §33: was 1.0 (mapped to entire screen)
 
     def test_custom_thresholds(self):
         """Test custom threshold configuration."""

@@ -21,20 +21,36 @@ logger = logging.getLogger(__name__)
 
 
 class GestureType(Enum):
-    """Types of recognized gestures."""
+    """Types of recognized gestures per §30 core gesture set."""
     NONE = auto()
+    # Core gestures per §30:
+    # 1. Point - index finger extended → pointer control
+    POINT = auto()
+    # 2. Pinch (thumb + index) → left click
     LEFT_CLICK = auto()
-    RIGHT_CLICK = auto()
+    # 3. Pinch Hold → drag
     DRAG_START = auto()
     DRAG_END = auto()
+    # 4. Two-Finger Scroll (index + middle) → scroll
     SCROLL_UP = auto()
     SCROLL_DOWN = auto()
     SCROLL_HORIZONTAL = auto()
+    # 5. Open Palm → pause/mode control
+    OPEN_PALM = auto()
+    # 6. Fist → secondary interaction/mode
+    FIST = auto()
     PAUSE_TRACKING = auto()
     RESUME_TRACKING = auto()
+    # 7. Thumb Gesture → configurable action
+    THUMB_GESTURE = auto()
     MIDDLE_CLICK = auto()
+    # 8. Two-Hand Gesture → mode switching
+    TWO_HAND_GESTURE = auto()
+
+    # Internal/auxiliary
     PINCH_CONFIRM = auto()
     PINCH_END = auto()
+    RIGHT_CLICK = auto()  # thumb + middle pinch
 
 
 class TrackingState(Enum):
@@ -188,6 +204,16 @@ class GestureState:
         self.right_pinch_phase = GesturePhaseState()
         self.fist_phase = GesturePhaseState()
         self.scroll_phase = GesturePhaseState()
+        self.open_palm_phase = GesturePhaseState()
+        self.thumb_gesture_phase = GesturePhaseState()
+
+        # Additional gesture state tracking (§30)
+        self.open_palm_active = False
+        self.open_palm_start_time = 0.0
+        self.thumb_gesture_active = False
+        self.thumb_gesture_start_time = 0.0
+        self.two_hand_gesture_active = False
+        self._middle_pinch_active = False
 
         # General
         self.last_gesture_time = 0.0
@@ -431,6 +457,46 @@ class GestureRecognizer:
                 ))
         else:
             self._state._middle_pinch_active = False
+
+        # Check open palm (all fingers extended) - §30.5
+        if primary_hand.is_open_palm():
+            if not self._state.open_palm_active:
+                self._state.open_palm_active = True
+                self._state.open_palm_start_time = current_time
+                events.append(GestureEvent(
+                    gesture_type=GestureType.OPEN_PALM,
+                    hand=primary_hand,
+                    timestamp=current_time
+                ))
+        else:
+            self._state.open_palm_active = False
+
+        # Check thumb gesture (thumb extended, others folded) - §30.7
+        if primary_hand.is_thumb_gesture():
+            if not self._state.thumb_gesture_active:
+                self._state.thumb_gesture_active = True
+                self._state.thumb_gesture_start_time = current_time
+                events.append(GestureEvent(
+                    gesture_type=GestureType.THUMB_GESTURE,
+                    hand=primary_hand,
+                    timestamp=current_time
+                ))
+        else:
+            self._state.thumb_gesture_active = False
+
+        # Check two-hand gesture (both hands making same gesture) - §30.8
+        if secondary_hand and self.config.enable_two_hand:
+            if (primary_hand.is_open_palm() and secondary_hand.is_open_palm()):
+                if not self._state.two_hand_gesture_active:
+                    self._state.two_hand_gesture_active = True
+                    events.append(GestureEvent(
+                        gesture_type=GestureType.TWO_HAND_GESTURE,
+                        hand=primary_hand,
+                        timestamp=current_time,
+                        data={"secondary_hand": secondary_hand.handedness}
+                    ))
+            else:
+                self._state.two_hand_gesture_active = False
 
         # Emit events via callback
         for event in events:
