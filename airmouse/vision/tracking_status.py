@@ -272,26 +272,36 @@ class TrackingStatus:
     def get_movement_permission(self) -> bool:
         """
         Get whether cursor movement is allowed.
-        
+
         Per spec §17: NO movement when LOST.
+        Per spec §18: NO movement during REACQUIRING or STABILIZING.
         """
         if self.phase == TrackingPhase.LOST:
             return False
         if self.phase == TrackingPhase.FROZEN:
+            return False
+        if self.phase == TrackingPhase.REACQUIRING:
+            return False
+        if self.phase == TrackingPhase.STABILIZING:
             return False
         if self.confidence.state == ConfidenceState.LOST:
             return False
         return True
-    
+
     def get_gesture_permission(self) -> bool:
         """
         Get whether gesture recognition is allowed.
-        
+
         Per spec §17: NO gestures when LOST.
+        Per spec §18: NO gestures during REACQUIRING or STABILIZING.
         """
         if self.phase == TrackingPhase.LOST:
             return False
         if self.phase == TrackingPhase.FROZEN:
+            return False
+        if self.phase == TrackingPhase.REACQUIRING:
+            return False
+        if self.phase == TrackingPhase.STABILIZING:
             return False
         if self.confidence.state == ConfidenceState.LOST:
             return False

@@ -7,7 +7,7 @@ import time
 from pathlib import Path
 import sys
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+sys.path.insert(0, '/home/shubham/airmouse')
 
 from airmouse.vision.confidence import (
     ConfidenceState, ConfidenceInfo, get_confidence_state, CONFIDENCE_THRESHOLDS

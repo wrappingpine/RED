@@ -24,7 +24,7 @@ from collections import deque
 
 @dataclass
 class PerformanceMetrics:
-    """Container for all performance metrics."""
+    """Container for all performance metrics per §45."""
     # Frame timing
     fps: float = 0.0
     frame_time_ms: float = 0.0
@@ -37,9 +37,19 @@ class PerformanceMetrics:
     cursor_ms: float = 0.0
     mouse_ms: float = 0.0
 
-    # System resources
+    # Latency breakdown (§45)
+    camera_to_landmark_ms: float = 0.0   # Camera capture → hand landmarks
+    landmark_to_pointer_ms: float = 0.0  # Landmarks → cursor position
+    end_to_end_ms: float = 0.0           # Camera frame → input event
+
+    # System resources (§45)
     cpu_percent: float = 0.0
+    cpu_peak_percent: float = 0.0        # Peak CPU usage
+    cpu_avg_percent: float = 0.0         # Running average CPU
     memory_mb: float = 0.0
+    memory_idle_mb: float = 0.0          # Idle RAM baseline
+    memory_tracking_mb: float = 0.0      # RAM during tracking
+    memory_peak_mb: float = 0.0          # Peak RAM
     memory_percent: float = 0.0
 
     # Camera
@@ -59,6 +69,14 @@ class PerformanceMetrics:
     # Cursor
     cursor_pos: tuple = (0, 0)
     cursor_velocity: tuple = (0.0, 0.0)
+
+    # Stability metrics (§45)
+    dropped_frames: int = 0               # Total dropped frames
+    tracking_losses: int = 0              # Total tracking loss events
+    false_gestures: int = 0               # False gesture detections
+    false_clicks: int = 0                 # False click events
+    frame_count: int = 0                  # Total frames processed
+    tracking_loss_count: int = 0          # Current consecutive loss count
 
 
 class PerformanceMonitor:
@@ -198,7 +216,7 @@ class PerformanceMonitor:
             self._metrics.mouse_ms = time_ms
 
     def update_system_stats(self):
-        """Update CPU and memory usage."""
+        """Update CPU and memory usage with peak tracking per §45."""
         try:
             cpu = self._process.cpu_percent(interval=0)
             mem_info = self._process.memory_info()
@@ -209,10 +227,76 @@ class PerformanceMonitor:
                 self._metrics.cpu_percent = cpu
                 self._metrics.memory_mb = mem_mb
                 self._metrics.memory_percent = mem_percent
+
+                # Track peaks (§45)
+                if cpu > self._metrics.cpu_peak_percent:
+                    self._metrics.cpu_peak_percent = cpu
+                if mem_mb > self._metrics.memory_peak_mb:
+                    self._metrics.memory_peak_mb = mem_mb
+
+                # Track idle/tracking memory states
+                if self._metrics.hand_detected:
+                    self._metrics.memory_tracking_mb = mem_mb
+                elif self._metrics.memory_idle_mb == 0.0:
+                    self._metrics.memory_idle_mb = mem_mb
+
+                # Running CPU average
+                cpu_history = list(self._cpu_history)
+                if cpu_history:
+                    self._metrics.cpu_avg_percent = sum(cpu_history) / len(cpu_history)
+
                 self._cpu_history.append(cpu)
                 self._memory_history.append(mem_mb)
         except Exception:
             pass
+
+    def update_latency(self, camera_to_landmark_ms: float = 0.0,
+                       landmark_to_pointer_ms: float = 0.0,
+                       end_to_end_ms: float = 0.0):
+        """Update latency breakdown metrics per §45."""
+        with self._lock:
+            self._metrics.camera_to_landmark_ms = camera_to_landmark_ms
+            self._metrics.landmark_to_pointer_ms = landmark_to_pointer_ms
+            self._metrics.end_to_end_ms = end_to_end_ms
+
+    def update_stability(self, dropped_frames: int = 0,
+                         tracking_losses: int = 0,
+                         false_gestures: int = 0,
+                         false_clicks: int = 0,
+                         tracking_loss_count: int = 0):
+        """Update stability metrics per §45."""
+        with self._lock:
+            self._metrics.dropped_frames = dropped_frames
+            self._metrics.tracking_losses = tracking_losses
+            self._metrics.false_gestures = false_gestures
+            self._metrics.false_clicks = false_clicks
+            self._metrics.tracking_loss_count = tracking_loss_count
+
+    def increment_frame_count(self):
+        """Increment total frame counter."""
+        with self._lock:
+            self._metrics.frame_count += 1
+
+    def record_tracking_loss(self):
+        """Record a tracking loss event."""
+        with self._lock:
+            self._metrics.tracking_losses += 1
+            self._metrics.tracking_loss_count += 1
+
+    def record_tracking_restored(self):
+        """Record that tracking was restored after a loss."""
+        with self._lock:
+            self._metrics.tracking_loss_count = 0
+
+    def record_false_gesture(self):
+        """Record a false gesture detection."""
+        with self._lock:
+            self._metrics.false_gestures += 1
+
+    def record_false_click(self):
+        """Record a false click event."""
+        with self._lock:
+            self._metrics.false_clicks += 1
 
     def update_camera_stats(self, brightness: float, exposure: int = -1, gain: int = -1):
         """Update camera statistics."""
