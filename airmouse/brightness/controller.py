@@ -55,9 +55,14 @@ class AutoBrightnessController:
         self._config = config
         self._on_state_change = on_state_change
 
-        # Components
-        self._als = AmbientLightSensor()
-        self._backlight = BacklightController(config.preferred_backlight_path)
+        # Components — NOT probed eagerly. Probing hardware (ALS / backlight)
+        # prints warnings to the log on every startup even when the feature
+        # is disabled, which is noise for users who don't care about
+        # auto-brightness. Probe lazily in start() instead.
+        self._als: Optional[AmbientLightSensor] = None
+        self._backlight: Optional[BacklightController] = None
+        self._als_available = False
+        self._backlight_available = False
 
         # State
         self._state = BrightnessState()
@@ -65,18 +70,25 @@ class AutoBrightnessController:
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
-        # Validate hardware
+    def _ensure_hardware(self):
+        """Probe ALS / backlight hardware once, lazily."""
+        if self._als is not None or self._backlight is not None:
+            return
+        self._als = AmbientLightSensor()
+        self._backlight = BacklightController(self._config.preferred_backlight_path)
         self._als_available = self._als.is_available()
         self._backlight_available = self._backlight.is_available()
 
         if not self._als_available:
-            logger.warning("No ambient light sensor available")
+            logger.info("No ambient light sensor available")
         if not self._backlight_available:
-            logger.warning("Backlight control not available (no write permission)")
+            logger.info("Backlight control not available (no write permission)")
 
     @property
     def is_available(self) -> bool:
         """Check if auto-brightness can function."""
+        # Probe lazily so a disabled feature doesn't report unavailable.
+        self._ensure_hardware()
         return self._als_available and self._backlight_available
 
     @property
@@ -111,6 +123,9 @@ class AutoBrightnessController:
         if not self._config.enabled:
             logger.info("Auto-brightness disabled in config")
             return False
+
+        # Probe hardware lazily — first time we're actually asked to run.
+        self._ensure_hardware()
 
         if not self._als_available:
             if self._config.require_als:
@@ -262,18 +277,20 @@ class AutoBrightnessController:
 
     def get_diagnostics(self) -> dict:
         """Get diagnostic information."""
+        # Ensure hardware has been probed so we don't NPE on lazy attrs.
+        self._ensure_hardware()
         return {
             'available': self.is_available,
             'active': self._state.is_active,
             'als': {
                 'available': self._als_available,
-                'device': self._als.get_device_info(),
+                'device': self._als.get_device_info() if self._als else None,
                 'current_lux': self._state.current_lux,
                 'smoothed_lux': self._state.smoothed_lux,
             },
             'backlight': {
                 'available': self._backlight_available,
-                'device': self._backlight.get_device_info(),
+                'device': self._backlight.get_device_info() if self._backlight else None,
                 'current_brightness': self._state.current_brightness,
                 'target_brightness': self._state.target_brightness,
             },

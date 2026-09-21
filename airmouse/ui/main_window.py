@@ -942,8 +942,12 @@ class MainWindow(QMainWindow):
     def _setup_tray(self):
         """Setup system tray using SystemTrayManager."""
         try:
-            # Create tray manager with AppIndicator3 backend (best for Linux)
-            self._tray_manager = SystemTrayManager(backend=TrayBackend.APPI_INDICATOR)
+            # Auto-detect the best backend for the current session.
+            # Forcing AppIndicator3 here makes the tray fail on Wayland
+            # compositors (COSMIC, GNOME-on-Wayland, KDE-on-Wayland)
+            # where libappindicator is unavailable, and only the noisy
+            # fallback path rescues it.
+            self._tray_manager = SystemTrayManager()
 
             # Create menu items
             menu_items = create_airmouse_tray_menu(
@@ -963,14 +967,8 @@ class MainWindow(QMainWindow):
                 self._tray_manager.show()
                 logger.info(f"System tray created with backend: {self._tray_manager.get_backend().value}")
             else:
-                logger.warning("Failed to create system tray with AppIndicator3, trying Qt fallback")
-                self._tray_manager = SystemTrayManager(backend=TrayBackend.QSYSTEM_TRAY)
-                if self._tray_manager.create("Air Mouse", menu_items):
-                    self._tray_manager.show()
-                    logger.info("System tray created with Qt fallback")
-                else:
-                    logger.warning("System tray not available")
-                    self._tray_manager = None
+                logger.warning("Failed to create system tray")
+                self._tray_manager = None
 
         except Exception as e:
             logger.warning(f"Failed to setup system tray: {e}")
