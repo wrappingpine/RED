@@ -440,8 +440,13 @@ class SafetyManager:
             except Exception as e:
                 logger.error(f"Safety callback error: {e}")
 
-    def disable(self):
-        """Disable safety monitoring."""
+    def disable(self, join: bool = True):
+        """Disable safety monitoring.
+
+        Args:
+            join: If True, wait for monitor thread to finish. Set False to
+                avoid deadlock when called from within a safety callback.
+        """
         self._enabled = False
         self._running = False
 
@@ -450,7 +455,7 @@ class SafetyManager:
         if self._inactivity_timer:
             self._inactivity_timer.stop()
 
-        if self._monitor_thread:
+        if join and self._monitor_thread and self._monitor_thread.is_alive():
             self._monitor_thread.join(timeout=1.0)
 
         logger.info("Safety manager disabled")
@@ -524,7 +529,7 @@ class SafetyManager:
 
     def _trigger_safety(self, trigger: SafetyTrigger, level: SafetyLevel, details: str):
         """Trigger safety response."""
-        if self._safety_active and level <= self._current_level:
+        if self._safety_active and level.value <= self._current_level.value:
             return  # Already at same or higher level
 
         x, y = (0, 0)
@@ -567,17 +572,17 @@ class SafetyManager:
         self._safety_active = True
         self._current_level = level
 
-        if level >= SafetyLevel.EMERGENCY:
+        if level.value >= SafetyLevel.EMERGENCY.value:
             if self._config.release_all_buttons and self._release_all_callback:
                 self._release_all_callback()
             if self._disable_callback:
                 self._disable_callback()
-        elif level >= SafetyLevel.DISABLE:
+        elif level.value >= SafetyLevel.DISABLE.value:
             if self._config.release_all_buttons and self._release_all_callback:
                 self._release_all_callback()
             if self._disable_callback:
                 self._disable_callback()
-        elif level >= SafetyLevel.PAUSE:
+        elif level.value >= SafetyLevel.PAUSE.value:
             if self._pause_callback:
                 self._pause_callback()
 

@@ -321,6 +321,7 @@ class AirMouseController:
         # State
         self.state = AirMouseState.STOPPED
         self._running = False
+        self._stopping = False
         self._thread: Optional[threading.Thread] = None
         self._stop_event = threading.Event()
 
@@ -363,6 +364,10 @@ class AirMouseController:
         # Tracking status (confidence + loss detection per spec §16-18)
         self._tracking_status = TrackingStatus()
         self.on_tracking_status_change: Optional[Callable[[dict], None]] = None
+
+        # Rate-limited logging for tracking loss (prevents spam)
+        self._last_tracking_lost_log: float = 0.0
+        self._tracking_lost_log_interval: float = 3.0  # Log at most once per 3 seconds
 
     def initialize(self) -> bool:
         """Initialize all components."""
@@ -526,7 +531,7 @@ class AirMouseController:
 
             # Add custom hotkey for debug overlay (Ctrl+Shift+G)
             debug_hotkey = Hotkey(
-                modifiers=(KeyModifier.CONTROL, KeyModifier.SHIFT),
+                modifiers={KeyModifier.CTRL, KeyModifier.SHIFT},
                 key=KeyCode.KEY_G,
                 callback=self.toggle_debug_overlay,
                 description="Toggle debug overlay"
@@ -535,7 +540,7 @@ class AirMouseController:
 
             # Add pause/resume hotkey (Super+Alt+P)
             pause_hotkey = Hotkey(
-                modifiers=(KeyModifier.SUPER, KeyModifier.ALT),
+                modifiers={KeyModifier.SUPER, KeyModifier.ALT},
                 key=KeyCode.KEY_P,
                 callback=self._toggle_pause_resume,
                 description="Pause/Resume tracking"
@@ -559,9 +564,16 @@ class AirMouseController:
     def _on_emergency(self):
         """Emergency disable callback - freeze input and stop tracking."""
         logger.critical("EMERGENCY DISABLE TRIGGERED!")
+        if self._stopping:
+            return
         if self._safety_manager:
             self._safety_manager.emergency_stop()
-        self.stop()
+        # Defer stop to a fresh thread — running _cleanup() (which calls
+        # MediaPipe face_tracker.close()) inline on the hotkey event loop
+        # thread segfaults the MediaPipe dispatcher.
+        import threading as _threading
+        t = _threading.Thread(target=self.stop, daemon=True)
+        t.start()
 
     def _toggle_pause_resume(self):
         """Toggle pause/resume state."""
@@ -587,15 +599,38 @@ class AirMouseController:
 
             self._safety_manager = SafetyManager(safety_config)
 
-            # Register safety callbacks
-            def on_safety_triggered(trigger, level, details):
-                logger.warning(f"Safety triggered: {trigger.value} at level {level.value}: {details}")
-                if level in (SafetyLevel.DISABLE, SafetyLevel.EMERGENCY):
-                    self.stop()
-                elif level == SafetyLevel.PAUSE:
+            # Register safety callbacks (required before start())
+            # NOTE: do NOT pass disable=self.stop here — _execute_safety_action
+            # runs on the safety monitor thread and would deadlock by calling
+            # stop() → _cleanup() → face_tracker.close() → MediaPipe dispatcher
+            # while the monitor thread is still alive. The on_safety_triggered
+            # event callback (registered below) handles stop() safely on the
+            # main thread instead.
+            self._safety_manager.set_callbacks(
+                get_cursor_pos=lambda: (0, 0),
+                get_screen_size=lambda: (1920, 1080),
+                release_all=self._release_all_input,
+                pause=self.pause,
+                disable=lambda: None,
+                show_notification=None,
+            )
+
+            def on_safety_triggered(event):
+                logger.warning(f"Safety triggered: {event.trigger.value} at level {event.level.value}: {event.details}")
+                if self._stopping:
+                    return
+                if event.level.value >= SafetyLevel.DISABLE.value:
+                    # Defer stop to a fresh thread — running _cleanup()
+                    # (which calls MediaPipe face_tracker.close()) inline on
+                    # the safety monitor thread segfaults the MediaPipe
+                    # dispatcher.
+                    import threading as _threading
+                    t = _threading.Thread(target=self.stop, daemon=True)
+                    t.start()
+                elif event.level.value == SafetyLevel.PAUSE.value:
                     self.pause()
 
-            self._safety_manager.on_safety_event = on_safety_triggered
+            self._safety_manager.add_callback(on_safety_triggered)
 
             # Start the safety manager
             if self._safety_manager.start():
@@ -611,11 +646,28 @@ class AirMouseController:
             logger.warning(f"Failed to setup safety: {e}")
             self._safety_manager = None
 
+    def _release_all_input(self):
+        """Release all active mouse buttons and reset cursor state."""
+        if self.input_manager:
+            try:
+                self.input_manager.release_all()
+            except Exception as e:
+                logger.error(f"Failed to release input: {e}")
+
     def stop(self):
         """Stop the air mouse."""
         logger.info("Stopping Air Mouse...")
         self._running = False
+        self._stopping = True
         self._stop_event.set()
+
+        # Stop safety manager FIRST to prevent re-entrant callbacks
+        if self._safety_manager:
+            try:
+                self._safety_manager.disable(join=False)
+            except Exception as e:
+                logger.warning(f"Safety disable error during stop: {e}")
+            self._safety_manager = None
 
         # Stop hotkey manager
         if self._hotkey_manager:
@@ -689,7 +741,11 @@ class AirMouseController:
             "confidence": self._tracking_status.confidence.confidence_value
         })
         
-        logger.warning(f"Tracking lost - all input frozen: {reason.name}")
+        # Rate-limited logging (prevents spam when hand is genuinely absent)
+        now = time.time()
+        if now - self._last_tracking_lost_log >= self._tracking_lost_log_interval:
+            logger.warning(f"Tracking lost - all input frozen: {reason.name}")
+            self._last_tracking_lost_log = now
 
     def _on_tracking_recovered(self):
         """Callback when tracking is recovered - reset and resume per §18."""
