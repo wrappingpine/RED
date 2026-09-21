@@ -591,13 +591,28 @@ class AirMouseController:
 
             # Create safety config - we can use defaults and customize
             safety_config = DEFAULT_SAFETY_CONFIG
-            safety_config.emergency_hotkey = "Super+Alt+A"  # Handled by hotkey manager
-            safety_config.corner_escape_enabled = True
-            safety_config.velocity_limit_enabled = True
-            safety_config.focus_loss_pause = True
+            safety_config.enable_corner_escape = True
+            safety_config.corner_size = 50
+            safety_config.corner_hold_time = 0.5
+            safety_config.enable_velocity_limit = True
+            safety_config.max_cursor_velocity = 5000
+            safety_config.enable_focus_loss_pause = True
+            safety_config.enable_inactivity_timeout = False
             safety_config.inactivity_timeout = 300.0  # 5 minutes
 
             self._safety_manager = SafetyManager(safety_config)
+
+            # Track the last cursor position we actually moved the mouse to.
+            # Using a static (0, 0) here makes the corner-escape detector
+            # fire immediately on every frame because (0, 0) IS the corner.
+            self._cursor_position = (0, 0)
+
+            def get_cursor_pos():
+                return self._cursor_position
+
+            def get_screen_size():
+                return (self.config.cursor.screen_width or 1920,
+                        self.config.cursor.screen_height or 1080)
 
             # Register safety callbacks (required before start())
             # NOTE: do NOT pass disable=self.stop here — _execute_safety_action
@@ -607,8 +622,8 @@ class AirMouseController:
             # event callback (registered below) handles stop() safely on the
             # main thread instead.
             self._safety_manager.set_callbacks(
-                get_cursor_pos=lambda: (0, 0),
-                get_screen_size=lambda: (1920, 1080),
+                get_cursor_pos=get_cursor_pos,
+                get_screen_size=get_screen_size,
                 release_all=self._release_all_input,
                 pause=self.pause,
                 disable=lambda: None,
@@ -1099,6 +1114,10 @@ class AirMouseController:
         # Move cursor if we have relative movement
         if rel_movement and (rel_movement[0] != 0 or rel_movement[1] != 0):
             self.input_manager.move(rel_movement[0], rel_movement[1])
+            # Update tracked cursor position so the corner-escape
+            # detector (and velocity limiter) see the real cursor.
+            x, y = self._cursor_position
+            self._cursor_position = (x + rel_movement[0], y + rel_movement[1])
 
         # Notify GUI with processed frame and hands
         if self.on_frame_processed:

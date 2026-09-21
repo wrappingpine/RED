@@ -404,6 +404,30 @@ class CameraManager:
             self._white_balance_auto_supported = False
             self._white_balance_temp_supported = False
 
+    def _setup_auto_exposure(self, device_path: str) -> None:
+        """Configure V4L2 for auto-exposure, auto-gain, and auto white balance."""
+        try:
+            import subprocess
+
+            # Enable auto-exposure (3 = aperture priority / auto)
+            if self._exposure_auto_supported:
+                subprocess.run(
+                    ["v4l2-ctl", "--device", device_path, "--set-ctrl=exposure_auto=3"],
+                    capture_output=True, timeout=1
+                )
+                logger.info("Enabled auto-exposure (aperture priority)")
+
+            # Enable auto white balance
+            if self._white_balance_auto_supported:
+                subprocess.run(
+                    ["v4l2-ctl", "--device", device_path, "--set-ctrl=white_balance_temperature_auto=1"],
+                    capture_output=True, timeout=1
+                )
+                logger.info("Enabled auto white balance")
+
+        except Exception as e:
+            logger.debug(f"Failed to configure auto-exposure: {e}")
+
     def _setup_fixed_exposure(self, device_path: str) -> None:
         """Configure V4L2 for fixed exposure, gain, and white balance."""
         try:
