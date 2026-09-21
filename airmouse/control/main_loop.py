@@ -532,7 +532,7 @@ class AirMouseController:
             # Add custom hotkey for debug overlay (Ctrl+Shift+G)
             debug_hotkey = Hotkey(
                 modifiers={KeyModifier.CTRL, KeyModifier.SHIFT},
-                key=KeyCode.KEY_G,
+                key=KeyCode.G,
                 callback=self.toggle_debug_overlay,
                 description="Toggle debug overlay"
             )
@@ -541,7 +541,7 @@ class AirMouseController:
             # Add pause/resume hotkey (Super+Alt+P)
             pause_hotkey = Hotkey(
                 modifiers={KeyModifier.SUPER, KeyModifier.ALT},
-                key=KeyCode.KEY_P,
+                key=KeyCode.P,
                 callback=self._toggle_pause_resume,
                 description="Pause/Resume tracking"
             )
