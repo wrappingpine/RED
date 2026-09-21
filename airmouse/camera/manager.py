@@ -7,6 +7,7 @@ Includes auto-exposure/brightness monitoring for consistent hand tracking.
 
 import cv2
 import os
+import sys
 import logging
 import time
 import numpy as np
@@ -156,11 +157,14 @@ class CameraManager:
         """
         info = CameraInfo(index=index, device_path=device_path)
 
-        # Try to open with V4L2 backend (preferred on Linux)
+        # Try to open with V4L2 backend (preferred on Linux).
+        # Only attempt the default backend on non-Linux systems: on Linux
+        # the default backend silently falls back to X11, which spews
+        # "backend is generally available but can't be used to capture by
+        # index" warnings even when V4L2 devices exist.
         cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
 
-        if not cap.isOpened():
-            # Try default backend
+        if not cap.isOpened() and not sys.platform.startswith("linux"):
             cap = cv2.VideoCapture(index)
 
         if not cap.isOpened():
@@ -222,10 +226,13 @@ class CameraManager:
             f"({self._settings.width}x{self._settings.height} @ {self._settings.fps}fps)"
         )
 
-        # Try V4L2 first for better Linux compatibility
+        # Try V4L2 first for better Linux compatibility.
+        # On Linux the default backend falls back to X11 and spews
+        # warnings when V4L2 devices exist but aren't openable by index,
+        # so only fall back to default on non-Linux systems.
         self._capture = cv2.VideoCapture(self._settings.device_index, cv2.CAP_V4L2)
 
-        if not self._capture.isOpened():
+        if not self._capture.isOpened() and not sys.platform.startswith("linux"):
             logger.warning("V4L2 backend failed, trying default backend")
             self._capture = cv2.VideoCapture(self._settings.device_index)
 
