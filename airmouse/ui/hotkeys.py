@@ -187,6 +187,8 @@ class X11HotkeyBackend(HotkeyBackendBase):
     def initialize(self) -> bool:
         try:
             from Xlib import display, X
+            from Xlib.error import DisplayConnectionError, BadAccess
+
             self._display = display.Display()
             self._root_window = self._display.screen().root
             self._initialized = True
@@ -766,6 +768,16 @@ class GlobalHotkeyManager(QObject):
     def is_initialized(self) -> bool:
         return self._initialized
 
+    def start(self) -> bool:
+        """Start the hotkey manager (alias for initialize()).
+
+        Returns True if the manager is (or became) initialized, False if
+        no backend was available. Safe to call multiple times.
+        """
+        if self._initialized:
+            return True
+        return self.initialize()
+
     def cleanup(self):
         """Clean up resources."""
         if self._backend:
@@ -775,6 +787,10 @@ class GlobalHotkeyManager(QObject):
         self._callbacks.clear()
         self._initialized = False
         self._backend_type = HotkeyBackend.NONE
+
+    def stop(self):
+        """Stop the hotkey manager (alias for cleanup())."""
+        self.cleanup()
 
     def __enter__(self):
         self.initialize()

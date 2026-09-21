@@ -608,15 +608,15 @@ class AirMouseController:
             # Start the cursor at the screen center rather than (0, 0).
             # (0, 0) is the top-left corner, so the corner-escape detector
             # would fire on the very first frame. Center is safe.
+            def get_screen_size():
+                return (self.config.cursor.screen_width or 1920,
+                        self.config.cursor.screen_height or 1080)
+
             screen_w, screen_h = get_screen_size()
             self._cursor_position = (screen_w // 2, screen_h // 2)
 
             def get_cursor_pos():
                 return self._cursor_position
-
-            def get_screen_size():
-                return (self.config.cursor.screen_width or 1920,
-                        self.config.cursor.screen_height or 1080)
 
             # Register safety callbacks (required before start())
             # NOTE: do NOT pass disable=self.stop here — _execute_safety_action

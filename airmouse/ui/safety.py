@@ -379,14 +379,14 @@ class SafetyManager:
         """Add safety event callback."""
         self._callbacks.append(callback)
 
-    def enable(self):
+    def enable(self) -> bool:
         """Enable safety monitoring."""
         if self._enabled:
-            return
+            return True
 
         if not self._get_cursor_pos or not self._get_screen_size:
             logger.error("Cannot enable safety: callbacks not set")
-            return
+            return False
 
         self._enabled = True
         self._safety_active = False
@@ -404,6 +404,7 @@ class SafetyManager:
         self._monitor_thread.start()
 
         logger.info("Safety manager enabled")
+        return True
 
     def start(self):
         """Start safety monitoring (alias for enable())."""
