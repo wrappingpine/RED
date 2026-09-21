@@ -345,6 +345,15 @@ class CursorController:
         # Convert to screen coordinates
         screen_x, screen_y = self._normalize_to_screen(x_norm, y_norm)
 
+        # Apply velocity clamping (§24)
+        if self._last_position is not None:
+            dt = max(current_time - self._last_time, 0.001)
+            dx = screen_x - self._last_position[0]
+            dy = screen_y - self._last_position[1]
+            dx, dy = self._clamp_velocity(dx, dy, dt)
+            screen_x = self._last_position[0] + dx
+            screen_y = self._last_position[1] + dy
+
         # Apply smoothing
         if self.config.smoothing != SmoothingAlgorithm.NONE:
             screen_x = self._smoother_x.smooth(screen_x)
@@ -386,6 +395,10 @@ class CursorController:
         dx = current_pos[0] - prev_pos[0]
         dy = current_pos[1] - prev_pos[1]
 
+        # Apply velocity clamping (§24)
+        dt = max(time.time() - self._last_time, 0.001)
+        dx, dy = self._clamp_velocity(dx, dy, dt)
+
         return (dx, dy)
 
     def get_relative_movement_from_plane(self, x_norm: float, y_norm: float) -> Optional[Tuple[int, int]]:
@@ -423,6 +436,10 @@ class CursorController:
         # Convert normalized movement to screen pixels
         screen_dx = dx * self._screen_width
         screen_dy = dy * self._screen_height
+
+        # Apply velocity clamping (§24)
+        dt = max(current_time - self._last_time, 0.001)
+        screen_dx, screen_dy = self._clamp_velocity(screen_dx, screen_dy, dt)
 
         self._last_time = current_time
         return (int(screen_dx), int(screen_dy))
