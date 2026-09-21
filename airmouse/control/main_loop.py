@@ -891,6 +891,12 @@ class AirMouseController:
                 stats.get('gain', -1)
             )
 
+        # Update landmarks for debug overlay
+        if self.stats.frames_processed % 1 == 0:  # Every frame for smooth overlay
+            if frame_data.frame is not None:
+                h, w = frame_data.frame.shape[:2]
+                self.performance_monitor.update_landmarks(hands, w, h)
+
         # Update tracking state
         active_gestures = [e.gesture_type.value for e in events] if events else []
         hand_state = tracking_result.tracking_state.value if hasattr(tracking_result, 'tracking_state') else "TRACKING_ONE_HAND"

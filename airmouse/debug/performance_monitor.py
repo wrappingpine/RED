@@ -20,6 +20,7 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any
 from collections import deque
+from ..vision.hand_tracker import Hand
 
 
 @dataclass
@@ -138,6 +139,9 @@ class PerformanceMonitor:
         self.gesture_confidence: float = 0.0
         self.pointer_jitter: float = 0.0
         self.active_profile: str = "unknown"
+        # For drawing landmarks and bounding box
+        self.landmarks_to_draw: List[List[Dict[str, float]]] = []  # per hand: list of {x,y,z}
+        self.bounding_boxes_to_draw: List[Dict[str, float]] = []   # per hand: {x, y, width, height} in pixel coordinates
 
         # Metrics history for graphs
         self._fps_history = deque(maxlen=history_size)
@@ -265,6 +269,36 @@ class PerformanceMonitor:
         except Exception:
             pass
 
+    def update_landmarks(self, hands: List[Hand], frame_width: int, frame_height: int):
+        """Update landmarks and bounding boxes for drawing in the overlay."""
+        landmarks_list = []
+        bboxes = []
+        for hand in hands:
+            # Convert normalized landmarks to pixel coordinates
+            pts = []
+            for lm in hand.landmarks:
+                pts.append({
+                    "x": lm.x * frame_width,
+                    "y": lm.y * frame_height,
+                    "z": lm.z
+                })
+            landmarks_list.append(pts)
+            # Compute bounding box
+            if pts:
+                xs = [p["x"] for p in pts]
+                ys = [p["y"] for p in pts]
+                x_min, x_max = min(xs), max(xs)
+                y_min, y_max = min(ys), max(ys)
+                bboxes.append({
+                    "x": x_min,
+                    "y": y_min,
+                    "width": x_max - x_min,
+                    "height": y_max - y_min
+                })
+        with self._lock:
+            self.landmarks_to_draw = landmarks_list
+            self.bounding_boxes_to_draw = bboxes
+
     def update_latency(self, camera_to_landmark_ms: float = 0.0,
                        landmark_to_pointer_ms: float = 0.0,
                        end_to_end_ms: float = 0.0):
@@ -348,6 +382,11 @@ class PerformanceMonitor:
 
         with self._lock:
             metrics = self._metrics
+            landmarks_to_draw = self.landmarks_to_draw
+            bboxes_to_draw = self.bounding_boxes_to_draw
+
+        # Draw landmarks and bounding boxes first (behind the panel)
+        self._draw_landmarks_and_boxes(annotated, landmarks_to_draw, bboxes_to_draw)
 
         # Draw background panel
         self._draw_background_panel(annotated)
@@ -359,6 +398,44 @@ class PerformanceMonitor:
         self._draw_graphs(annotated)
 
         return annotated
+
+    def _draw_landmarks_and_boxes(self, frame: np.ndarray,
+                                    landmarks: List[List[Dict[str, float]]],
+                                    bboxes: List[Dict[str, float]]):
+        """Draw hand landmarks and bounding boxes on the frame."""
+        # Draw connections (MediaPipe hand connections)
+        connections = [
+            (0, 1), (1, 2), (2, 3), (3, 4),  # thumb
+            (0, 5), (5, 6), (6, 7), (7, 8),  # index
+            (5, 9), (9, 10), (10, 11), (11, 12),  # middle
+            (9, 13), (13, 14), (14, 15), (15, 16),  # ring
+            (13, 17), (17, 18), (18, 19), (19, 20),  # pinky
+            (0, 17)  # palm
+        ]
+        
+        # Draw connections
+        for hand_lm in landmarks:
+            for start_idx, end_idx in connections:
+                if start_idx < len(hand_lm) and end_idx < len(hand_lm):
+                    x1, y1 = int(hand_lm[start_idx]["x"]), int(hand_lm[start_idx]["y"])
+                    x2, y2 = int(hand_lm[end_idx]["x"]), int(hand_lm[end_idx]["y"])
+                    cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 1)
+        
+        # Draw landmark points
+        for hand_lm in landmarks:
+            for i, lm in enumerate(hand_lm):
+                x, y = int(lm["x"]), int(lm["y"])
+                # Wrist larger, fingertips larger
+                radius = 4 if i in [0, 4, 8, 12, 16, 20] else 2
+                color = (0, 255, 255) if i == 0 else (0, 255, 0)
+                cv2.circle(frame, (x, y), radius, color, -1)
+        
+        # Draw bounding boxes
+        for bbox in bboxes:
+            x, y = int(bbox["x"]), int(bbox["y"])
+            w, h = int(bbox["width"]), int(bbox["height"])
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 0, 255), 2)
+            cv2.putText(frame, "Hand", (x, y - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 0, 255), 1)
 
     def _draw_background_panel(self, frame: np.ndarray):
         """Draw semi-transparent background panel."""
