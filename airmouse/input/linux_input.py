@@ -335,21 +335,60 @@ class YdotoolBackend(InputBackendBase):
         self._initialized = False
 
     def is_available(self) -> bool:
-        # Check if ydotool is installed
+        # Check if ydotool is installed. We deliberately do NOT require the
+        # daemon to be running here — initialize() will try to start it.
+        # Previously this ran `ydotool mousemove 0 0`, which fails when the
+        # daemon is down, causing the entire backend to be skipped on a
+        # fresh boot.
         self._ydotool_path = shutil.which('ydotool')
-        if not self._ydotool_path:
-            return False
+        return self._ydotool_path is not None
 
-        # Check if ydotoold daemon is running or can be started
+    def _try_start_daemon(self) -> bool:
+        """Attempt to start the ydotoold daemon if it is not already running."""
         try:
             result = subprocess.run(
-                ['ydotool', 'mousemove', '0', '0'],
-                capture_output=True, timeout=2
+                ['pidof', 'ydotoold'],
+                capture_output=True, timeout=1
             )
-            # If it works (exit code 0 or specific error), ydotool is functional
-            return result.returncode == 0 or "not connected" not in result.stderr.lower()
+            if result.returncode == 0:
+                self._ydotoold_running = True
+                return True
         except Exception:
-            return False
+            pass
+
+        # Try systemctl first (preferred on systemd distros)
+        for launcher in (
+            ['systemctl', '--user', 'start', 'ydotoold'],
+            ['systemctl', 'start', 'ydotoold'],
+        ):
+            try:
+                r = subprocess.run(launcher, capture_output=True, timeout=5)
+                if r.returncode == 0:
+                    logger.info(f"Started ydotoold via {' '.join(launcher)}")
+                    # Give the daemon a moment to register its socket
+                    time.sleep(0.5)
+                    self._ydotoold_running = True
+                    return True
+                logger.debug(f"{' '.join(launcher)} failed: {r.stderr.decode(errors='replace')}")
+            except Exception as e:
+                logger.debug(f"Could not start ydotoold via {' '.join(launcher)}: {e}")
+
+        # Fall back to launching ydotoold directly in the background
+        try:
+            subprocess.Popen(
+                ['ydotoold'],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+            time.sleep(0.5)
+            self._ydotoold_running = True
+            logger.info("Started ydotoold directly in the background")
+            return True
+        except Exception as e:
+            logger.warning(f"Could not launch ydotoold directly: {e}")
+
+        return False
 
     def initialize(self) -> bool:
         if not self.is_available():
@@ -364,8 +403,17 @@ class YdotoolBackend(InputBackendBase):
             self._ydotoold_running = result.returncode == 0
 
             if not self._ydotoold_running:
-                logger.warning("ydotoold daemon not running. Start with: sudo systemctl start ydotoold")
-                logger.warning("Or run: sudo ydotoold &")
+                logger.warning("ydotoold daemon not running - attempting to start it")
+                if not self._try_start_daemon():
+                    logger.warning(
+                        "ydotoold daemon not running. Start manually with: "
+                        "sudo systemctl start ydotoold  (or: sudo ydotoold &)"
+                    )
+                    # Still mark initialized so the caller can decide;
+                    # mouse operations will report failures rather than
+                    # silently no-op'ing.
+            else:
+                logger.info("ydotoold daemon is running")
 
             self._initialized = True
             logger.info("ydotool backend initialized")
