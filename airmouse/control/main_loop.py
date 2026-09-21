@@ -531,6 +531,7 @@ class AirMouseController:
 
             # Add custom hotkey for debug overlay (Ctrl+Shift+G)
             debug_hotkey = Hotkey(
+                id="debug_overlay",
                 modifiers={KeyModifier.CTRL, KeyModifier.SHIFT},
                 key=KeyCode.G,
                 callback=self.toggle_debug_overlay,
@@ -540,6 +541,7 @@ class AirMouseController:
 
             # Add pause/resume hotkey (Super+Alt+P)
             pause_hotkey = Hotkey(
+                id="pause_resume",
                 modifiers={KeyModifier.SUPER, KeyModifier.ALT},
                 key=KeyCode.P,
                 callback=self._toggle_pause_resume,
@@ -603,9 +605,11 @@ class AirMouseController:
             self._safety_manager = SafetyManager(safety_config)
 
             # Track the last cursor position we actually moved the mouse to.
-            # Using a static (0, 0) here makes the corner-escape detector
-            # fire immediately on every frame because (0, 0) IS the corner.
-            self._cursor_position = (0, 0)
+            # Start the cursor at the screen center rather than (0, 0).
+            # (0, 0) is the top-left corner, so the corner-escape detector
+            # would fire on the very first frame. Center is safe.
+            screen_w, screen_h = get_screen_size()
+            self._cursor_position = (screen_w // 2, screen_h // 2)
 
             def get_cursor_pos():
                 return self._cursor_position
