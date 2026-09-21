@@ -123,6 +123,21 @@ class PerformanceMonitor:
         # State
         self._enabled = False
         self._lock = threading.Lock()
+        
+        # Camera diagnostics (§61)
+        self.camera_fps: float = 0.0
+        self.camera_brightness: float = 0.0
+        self.camera_exposure: int = -1
+        self.camera_gain: int = -1
+        self.camera_width: int = 0
+        self.camera_height: int = 0
+
+        # Tracking diagnostics (§61)
+        self.tracking_fps: float = 0.0
+        self.hand_confidence: float = 0.0
+        self.gesture_confidence: float = 0.0
+        self.pointer_jitter: float = 0.0
+        self.active_profile: str = "unknown"
 
         # Metrics history for graphs
         self._fps_history = deque(maxlen=history_size)
@@ -446,6 +461,10 @@ class PerformanceMonitor:
         # Controls hint
         y += self._section_spacing
         draw_line("Press 'P' to toggle overlay", color=(180, 180, 180))
+
+        # Input backend (§61)
+        draw_section("INPUT BACKEND")
+        draw_line(f"Profile: {metrics.active_profile}")
 
     def _draw_graphs(self, frame: np.ndarray):
         """Draw mini performance graphs."""

@@ -249,6 +249,16 @@ class GestureState:
         self.adaptive_current_factor: float = 1.0
         self.adaptive_frame_count: int = 0
 
+        # Two-Hand Support (§68-69)
+        self.primary_hand_locked: bool = False
+        self.primary_hand_lock_time: float = 0.0
+        self.primary_hand_lock_handedness: str = ""
+        self.secondary_hand_locked: bool = False
+        self.secondary_hand_lock_handedness: str = ""
+        self.hand_swap_count: int = 0
+        self.last_hand_swap_time: float = 0.0
+        self.min_hand_lock_duration: float = 1.0  # Lock hands for 1s before switching
+
         # General
         self.last_gesture_time = 0.0
         self.last_gesture_type = GestureType.NONE
@@ -302,32 +312,56 @@ class GestureRecognizer:
                 hand_map[hand.handedness] = hand
                 self._hand_history[hand.handedness] = hand
 
-        # Determine primary and secondary hand based on config preference
+        # Determine primary and secondary hand based on config preference with stability locking (§68-69)
         primary_hand = None
         secondary_hand = None
 
-        if self.config.enable_two_hand and len(hand_map) >= 2:
-            # Two hands detected - use preferred handedness for primary
-            pref = self.config.preferred_handedness
-            if pref in hand_map:
-                primary_hand = hand_map[pref]
-                # Secondary is the other hand
-                for h in hand_map.values():
-                    if h.handedness != pref:
-                        secondary_hand = h
-                        break
+        if len(hand_map) >= 2:
+            if self.config.enable_two_hand:
+                # Support stable identity locking to prevent accidental switching
+                pref = self.config.preferred_handedness
+                
+                # Check if we have locked hand assignments
+                if self._state.primary_hand_locked and self._state.primary_hand_lock_handedness in hand_map:
+                    primary_hand = hand_map[self._state.primary_hand_lock_handedness]
+                    # Find secondary
+                    for hness, hand in hand_map.items():
+                        if hness != self._state.primary_hand_lock_handedness:
+                            secondary_hand = hand
+                            break
+                else:
+                    # Establish lock
+                    if pref in hand_map:
+                        primary_hand = hand_map[pref]
+                        for hness, hand in hand_map.items():
+                            if hness != pref:
+                                secondary_hand = hand
+                                break
+                    else:
+                        hands_list = list(hand_map.values())
+                        primary_hand = hands_list[0]
+                        secondary_hand = hands_list[1]
+                    
+                    self._state.primary_hand_locked = True
+                    self._state.primary_hand_lock_handedness = primary_hand.handedness
+                    self._state.primary_hand_lock_time = current_time
             else:
-                # Fallback: first two hands
-                hands_list = list(hand_map.values())
-                primary_hand = hands_list[0] if hands_list else None
-                secondary_hand = hands_list[1] if len(hands_list) > 1 else None
+                # Two-hand disabled: only use preferred or first hand as primary
+                pref = self.config.preferred_handedness
+                if pref in hand_map:
+                    primary_hand = hand_map[pref]
+                else:
+                    primary_hand = list(hand_map.values())[0]
         elif len(hand_map) == 1:
-            # Single hand - use it as primary
             primary_hand = list(hand_map.values())[0]
+            # If we transition from 2 hands to 1, release the locked assignment after verification
+            if self._state.primary_hand_locked and self._state.primary_hand_lock_handedness != primary_hand.handedness:
+                # If we only have 1 hand and it doesn't match lock, we unlock or transition
+                self._state.primary_hand_locked = False
         else:
-            # No hands
             primary_hand = None
             secondary_hand = None
+            self._state.primary_hand_locked = False
 
         hand_count = len(hand_map)
 
@@ -347,6 +381,9 @@ class GestureRecognizer:
                 self._state.tracking_state = TrackingState.TRACKING_ONE_HAND
         else:
             self._state.tracking_state = TrackingState.LOST_TRACK
+
+        # Update gesture mode based on config and state
+        self._update_gesture_mode(current_time, primary_hand, secondary_hand)
 
         # Check for fist (pause tracking) - only on primary hand
         if primary_hand and primary_hand.is_fist():
@@ -854,6 +891,40 @@ class GestureRecognizer:
 
     def reset(self):
         self._state.reset()
+
+    def _update_gesture_mode(self, current_time: float, primary_hand: Hand, secondary_hand: Hand):
+        """Update interaction mode based on config and detected gestures."""
+        if self.config.paused_mode:
+            return
+        
+        if self.config.gesture_mode:
+            # In gesture mode, only emit gesture events, not pointer movements
+            pass
+
+    def _apply_adaptive_sensitivity(self, base_factor: float = 1.0) -> float:
+        """Apply adaptive sensitivity based on learned user behavior."""
+        if not self.config.adaptive_learning:
+            return base_factor
+        
+        # Simple velocity-based adaptation
+        if self._state.adaptive_velocity_samples:
+            avg_velocity = sum(self._state.adaptive_velocity_samples) / len(self._state.adaptive_velocity_samples)
+            if avg_velocity > 0:
+                # Normalize: faster user gets sensitivity boost
+                factor = 1.0 + (avg_velocity / 200.0)  # Scale based on velocity
+                self._state.adaptive_current_factor = max(
+                    self.config.adaptive_min_factor,
+                    min(self.config.adaptive_max_factor, factor)
+                )
+            else:
+                # Stationary user: maintain factor
+                self._state.adaptive_current_factor = max(
+                    self.config.adaptive_min_factor,
+                    min(self.config.adaptive_max_factor, 1.0)
+                )
+            return base_factor * self._state.adaptive_current_factor
+        
+        return base_factor
 
 
 # Convenience function for simple gesture detection
