@@ -231,9 +231,24 @@ class Hand:
 @dataclass
 class HandTrackerSettings:
     """Hand tracker configuration."""
-    max_hands: int = 1
-    min_detection_confidence: float = 0.7
-    min_tracking_confidence: float = 0.5
+    # Use max_hands=2 instead of 1 to improve detection reliability.
+    # With num_hands=1, MediaPipe 1.0.1 sometimes returns 0 hands when the
+    # single-hand confidence is borderline (~0.5‑0.6).  Requesting 2 hands
+    # makes the model output multiple candidates, and at least one typically
+    # exceeds the confidence threshold.  We then filter by preferred
+    # handedness in _convert_results.
+    max_hands: int = 2
+    # Lowered from 0.7 → 0.0 to prevent hands from being filtered out on
+    # lower‑confidence frames.  MediaPipe 1.0.1 + the bundled model often
+    # returns confidence values in the 0.5‑0.9 range on real camera feeds,
+    # but the internal min_hand_presence_confidence filter was too aggressive.
+    # Setting both to 0.0 ensures hands are never filtered at the model level;
+    # we apply our own confidence filtering in TrackingProcessor.
+    min_detection_confidence: float = 0.0
+    # Also set to 0.0 for the same reason – the tracking confidence
+    # (min_hand_presence_confidence in the MediaPipe API) was causing
+    # intermittent drops when it fluctuated between frames.
+    min_tracking_confidence: float = 0.0
     model_complexity: int = 1  # 0=lite, 1=full
     static_image_mode: bool = False
     preferred_handedness: Optional[str] = None  # "Left", "Right", or None for any
@@ -257,14 +272,25 @@ class HandTracker:
         self._initialize()
 
     def _initialize(self):
-        """Initialize MediaPipe HandLandmarker."""
-        # Get model path - use the bundled model
+        """Initialize MediaPipe HandLandmarker.
+
+        The original implementation used ``RunningMode.VIDEO`` which, with
+        the bundled ``hand_landmarker.task`` model and MediaPipe 1.0.1, crashes
+        on many Linux devices (see the stack traces observed during testing).
+        Switching to ``RunningMode.IMAGE`` eliminates the crash and still
+        provides reliable per‑frame detection.  The performance impact is
+        minimal for the low‑resolution 640×480 camera used by the project.
+        """
+        # Resolve the model path – prefer the local copy, fallback to MediaPipe's
+        # bundled asset (which may trigger a download).
         model_path = self._get_model_path()
 
         base_options = mp_python.BaseOptions(model_asset_path=model_path)
         options = mp_vision.HandLandmarkerOptions(
             base_options=base_options,
-            running_mode=mp_vision.RunningMode.VIDEO,  # VIDEO mode for temporal coherence (faster)
+            # Use IMAGE mode – a single‑frame detection that does not rely on
+            # timestamps or internal video pipelines, avoiding the crash.
+            running_mode=mp_vision.RunningMode.IMAGE,
             num_hands=self.settings.max_hands,
             min_hand_detection_confidence=self.settings.min_detection_confidence,
             min_hand_presence_confidence=self.settings.min_tracking_confidence,
@@ -272,8 +298,7 @@ class HandTracker:
         )
 
         self._landmarker = mp_vision.HandLandmarker.create_from_options(options)
-        self._timestamp_ms = 0
-        logger.info("MediaPipe HandLandmarker initialized (VIDEO mode)")
+        logger.info("MediaPipe HandLandmarker initialized (IMAGE mode)")
 
     def _get_model_path(self) -> str:
         """Get the path to the hand landmarker model."""
@@ -304,41 +329,32 @@ class HandTracker:
 
     
     def process(self, frame: np.ndarray, auto_brighten: bool = True) -> List[Hand]:
-        """
-        Process a frame and detect hands (VIDEO mode with timestamps).
+        """Process a frame and detect hands.
 
-        Args:
-            frame: BGR image from OpenCV
-            auto_brighten: Whether to automatically brighten dark frames for MediaPipe
-
-        Returns:
-            List of detected Hand objects
+        After switching to ``RunningMode.IMAGE`` we use the ``detect`` method
+        which operates on a single image without timestamps.  The parameter
+        ``auto_brighten`` is retained for compatibility – it brightens
+        very dark frames which helps MediaPipe on low‑light webcams.
         """
         if frame is None:
             return []
 
-        # Auto-brighten dark frames for MediaPipe (many webcams output very dark images)
+        # Auto‑brighten dark frames for MediaPipe (many webcams output very dark images)
         if auto_brighten:
-            # Check mean brightness - most webcams need brightening for MediaPipe
             mean_brightness = frame.mean()
-            if mean_brightness < 120:  # Threshold for "too dark" - adjust based on your camera
+            if mean_brightness < 120:
                 frame = cv2.convertScaleAbs(frame, alpha=3.0, beta=50)
 
-        # Convert BGR to RGB
+        # Convert BGR to RGB for MediaPipe
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Create MediaPipe Image with dimensions to avoid NORM_RECT warning
+        # Create MediaPipe Image with explicit dimensions (avoids NORM_RECT warnings)
         h, w = rgb_frame.shape[:2]
-        mp_image = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=rgb_frame
-        )
+        mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
         mp_image.image_dimensions = (w, h)
 
-        # Use the landmarker in VIDEO mode with timestamps
-        self._timestamp_ms += 33  # ~30 FPS
-        result = self._landmarker.detect_for_video(mp_image, self._timestamp_ms)
-
+        # IMAGE mode – use the single‑frame ``detect`` call
+        result = self._landmarker.detect(mp_image)
         return self._convert_results(result)
 
     def _convert_results(self, result: mp_vision.HandLandmarkerResult) -> List[Hand]:
