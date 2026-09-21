@@ -61,7 +61,7 @@ class SystemTrayManager(QObject):
     tray_activated = Signal(str)  # "left_click", "right_click", "middle_click"
     menu_action_triggered = Signal(str)  # action_id
 
-    def __init__(self, app_id: str = "airmouse", parent: Optional[QObject] = None):
+    def __init__(self, app_id: str = "airmouse", parent: Optional[QObject] = None, backend: Optional[TrayBackend] = None):
         super().__init__(parent)
         self._app_id = app_id
         self._backend: TrayBackend = TrayBackend.NONE
@@ -74,8 +74,13 @@ class SystemTrayManager(QObject):
         self._is_visible = False
         self._callbacks: Dict[str, Callable] = {}
 
-        # Try to detect and initialize best backend
-        self._detect_backend()
+        # If backend is explicitly provided, use it; otherwise auto-detect
+        if backend is not None:
+            self._backend = backend
+            logger.info(f"Using explicit backend: {backend.value}")
+        else:
+            # Try to detect and initialize best backend
+            self._detect_backend()
 
     def _detect_backend(self) -> TrayBackend:
         """Detect the best available system tray backend."""
@@ -195,6 +200,33 @@ class SystemTrayManager(QObject):
 
         self._icon_cache[name] = self._default_icon
         return self._default_icon
+
+    def create(self, app_id: str, items: List[TrayMenuItem]) -> bool:
+        """Create and initialize the system tray with menu items.
+        
+        Args:
+            app_id: Application ID for the tray
+            items: List of menu items
+            
+        Returns:
+            True if tray was created successfully
+        """
+        self._app_id = app_id
+        
+        if self._backend == TrayBackend.NONE:
+            logger.error("Cannot create tray: no backend available")
+            return False
+        
+        if not self.initialize():
+            logger.error("Failed to initialize system tray")
+            return False
+        
+        # Create menu
+        self.create_menu(items)
+        
+        self._is_visible = True
+        logger.info(f"System tray created: {app_id}")
+        return True
 
     def initialize(self) -> bool:
         """Initialize the system tray."""
@@ -514,6 +546,10 @@ def create_airmouse_tray_menu(
     on_calibrate: Callable,
     on_diagnose: Callable,
     on_quit: Callable,
+    on_show: Optional[Callable] = None,
+    on_start: Optional[Callable] = None,
+    on_pause: Optional[Callable] = None,
+    on_stop: Optional[Callable] = None,
     is_active: bool = False,
     is_paused: bool = False
 ) -> List[TrayMenuItem]:
@@ -528,10 +564,25 @@ def create_airmouse_tray_menu(
         ),
         TrayMenuItem(
             text="&Pause Tracking" if not is_paused else "&Resume Tracking",
-            callback=lambda: None,  # Will be set by caller
+            callback=on_pause or on_toggle,
             checkable=True,
             checked=is_paused,
             icon="media-playback-pause"
+        ),
+        TrayMenuItem(
+            text="&Show",
+            callback=on_show or (lambda: None),
+            icon="window"
+        ),
+        TrayMenuItem(
+            text="&Start",
+            callback=on_start or (lambda: None),
+            icon="media-playback-start"
+        ),
+        TrayMenuItem(
+            text="&Stop",
+            callback=on_stop or (lambda: None),
+            icon="media-playback-stop"
         ),
         TrayMenuItem(
             text="&Calibrate...",

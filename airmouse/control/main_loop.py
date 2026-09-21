@@ -367,11 +367,16 @@ class AirMouseController:
     def initialize(self) -> bool:
         """Initialize all components."""
         logger.info("Initializing Air Mouse...")
+        
+        health_results = {}
+        all_ok = True
 
         try:
             # Detect cameras first
             cameras = self.camera.detect_cameras()
             if not cameras:
+                logger.error("✗ No cameras detected")
+                health_results['camera'] = 'FAIL: no devices found'
                 self._set_error("No cameras detected")
                 return False
 
@@ -387,15 +392,20 @@ class AirMouseController:
 
             # Open camera
             if not self.camera.open_camera(self.config.camera):
+                logger.error("✗ Failed to open camera")
+                health_results['camera'] = 'FAIL: cannot open device'
                 self._set_error("Failed to open camera")
                 return False
 
             # Get actual camera resolution
             actual_width, actual_height = self.camera.get_resolution()
-            logger.info(f"Camera resolution: {actual_width}x{actual_height}")
+            logger.info(f"✓ Camera: {actual_width}x{actual_height}")
+            health_results['camera'] = f'OK: {actual_width}x{actual_height}'
 
             # Initialize hand tracker
             self.hand_tracker = HandTracker(self.config.hand_tracker)
+            logger.info("✓ Hand tracking initialized")
+            health_results['hand_tracker'] = 'OK'
 
             # Initialize face tracker (required for head-relative mode)
             if self.config.tracking.use_head_relative:
@@ -405,7 +415,8 @@ class AirMouseController:
                     min_presence_confidence=0.5,
                     min_tracking_confidence=0.5,
                 ))
-                logger.info("Face tracker initialized for head-relative mode")
+                logger.info("✓ Face tracker initialized for head-relative mode")
+                health_results['face_tracker'] = 'OK'
 
             # Initialize cursor controller
             screen_width, screen_height = get_screen_size()
@@ -414,33 +425,49 @@ class AirMouseController:
             self.config.cursor.camera_width = actual_width
             self.config.cursor.camera_height = actual_height
             self.cursor_controller = CursorController(self.config.cursor)
+            logger.info(f"✓ Cursor controller: {screen_width}x{screen_height} screen")
+            health_results['cursor'] = f'OK: {screen_width}x{screen_height}'
 
             # Initialize gesture recognizer
             self.gesture_recognizer = GestureRecognizer(
                 config=self.config.gestures,
                 callback=self.on_gesture
             )
+            logger.info("✓ Gesture recognizer initialized")
+            health_results['gestures'] = 'OK'
 
             # Initialize tracking processor
             self.tracking_processor = TrackingProcessor(self.config.tracking)
+            logger.info("✓ Tracking processor initialized")
+            health_results['tracking'] = 'OK'
 
             # Initialize auto-brightness controller
             self.brightness_controller = AutoBrightnessController(
                 self.config.brightness,
                 on_state_change=self._on_brightness_state_change
             )
+            logger.info("✓ Auto-brightness controller initialized")
+            health_results['brightness'] = 'OK'
 
             # Initialize Linux input manager (supports Wayland, X11, uinput, ydotool)
             self.input_manager = LinuxInputManager()
             if not self.input_manager.initialize():
+                logger.error("✗ Failed to initialize input backend")
+                health_results['input'] = 'FAIL: backend unavailable'
                 self._set_error("Failed to initialize input backend")
                 return False
+            
+            backend_type = self.input_manager.get_backend_type().value
+            desktop_env = self.input_manager.get_desktop_environment().value
+            logger.info(f"✓ Input backend: {backend_type} (desktop: {desktop_env})")
+            health_results['input'] = f'OK: {backend_type} ({desktop_env})'
 
             logger.info("All components initialized successfully")
             self._set_status("initialized", {
                 "screen": (screen_width, screen_height),
-                "input_backend": self.input_manager.get_backend_type().value,
-                "desktop_env": self.input_manager.get_desktop_environment().value
+                "input_backend": backend_type,
+                "desktop_env": desktop_env,
+                "health": health_results
             })
             return True
 
@@ -495,7 +522,7 @@ class AirMouseController:
             from ..ui.hotkeys import GlobalHotkeyManager, Hotkey, HotkeyBackend, KeyModifier, KeyCode, create_emergency_hotkey_manager
 
             # Create emergency hotkey manager with default hotkeys (Super+Alt+A to disable)
-            self._hotkey_manager = create_emergency_hotkey_manager()
+            self._hotkey_manager = create_emergency_hotkey_manager(emergency_callback=self._on_emergency)
 
             # Add custom hotkey for debug overlay (Ctrl+Shift+G)
             debug_hotkey = Hotkey(
@@ -528,6 +555,13 @@ class AirMouseController:
         except Exception as e:
             logger.warning(f"Failed to setup hotkeys: {e}")
             self._hotkey_manager = None
+
+    def _on_emergency(self):
+        """Emergency disable callback - freeze input and stop tracking."""
+        logger.critical("EMERGENCY DISABLE TRIGGERED!")
+        if self._safety_manager:
+            self._safety_manager.emergency_stop()
+        self.stop()
 
     def _toggle_pause_resume(self):
         """Toggle pause/resume state."""

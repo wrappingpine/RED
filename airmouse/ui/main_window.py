@@ -947,13 +947,15 @@ class MainWindow(QMainWindow):
 
             # Create menu items
             menu_items = create_airmouse_tray_menu(
+                on_toggle=self._on_start,
+                on_settings=self._show_settings,
+                on_calibrate=self._on_calibrate,
+                on_diagnose=lambda: None,
+                on_quit=QApplication.quit,
                 on_show=self.show,
                 on_start=self._on_start,
                 on_pause=self._on_pause,
                 on_stop=self._on_stop,
-                on_quit=QApplication.quit,
-                on_settings=self._show_settings,
-                on_calibrate=self._on_calibrate,
             )
 
             # Create and show tray
@@ -1106,6 +1108,12 @@ class MainWindow(QMainWindow):
         """Handle settings change."""
         logger.info("Settings changed, restart required for some changes")
         self.statusBar().showMessage("Settings updated (restart required for some changes)")
+
+    def _on_calibrate(self):
+        """Calibrate hand tracking."""
+        if self.controller:
+            self.controller.calibrate()
+        self.statusBar().showMessage("Calibration started")
 
     def _update_tray_actions(self, state: AirMouseState):
         """Update tray menu actions based on state."""

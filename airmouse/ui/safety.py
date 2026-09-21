@@ -405,6 +405,39 @@ class SafetyManager:
 
         logger.info("Safety manager enabled")
 
+    def start(self):
+        """Start safety monitoring (alias for enable())."""
+        return self.enable()
+
+    def emergency_stop(self):
+        """Immediate emergency stop - release all buttons and freeze input."""
+        logger.critical("EMERGENCY STOP TRIGGERED!")
+        self._safety_active = True
+        self._current_level = SafetyLevel.EMERGENCY
+
+        # Release all buttons if callback is set
+        if self._release_all_callback:
+            try:
+                self._release_all_callback()
+            except Exception as e:
+                logger.error(f"Failed to release buttons: {e}")
+
+        # Record event
+        event = SafetyEvent(
+            timestamp=time.time(),
+            trigger=SafetyTrigger.GLOBAL_HOTKEY,
+            level=SafetyLevel.EMERGENCY,
+            details="Emergency stop triggered"
+        )
+        self._record_event(event)
+
+        # Notify callbacks
+        for callback in self._callbacks:
+            try:
+                callback(event)
+            except Exception as e:
+                logger.error(f"Safety callback error: {e}")
+
     def disable(self):
         """Disable safety monitoring."""
         self._enabled = False

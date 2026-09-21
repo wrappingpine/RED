@@ -413,14 +413,22 @@ class YdotoolBackend(InputBackendBase):
         return self._run_ydotool('mouseup', btn_map[button])
 
     def scroll(self, amount: int) -> bool:
+        """Scroll vertically. Positive = up."""
+        if not self._initialized:
+            return False
         if amount > 0:
-            return self._run_ydotool('mousemove', '--', '0', '0', '&&', 'ydotool', 'click', 'wheel_up')
+            return self._run_ydotool('click', 'wheel_up')
         else:
-            return self._run_ydotool('mousemove', '--', '0', '0', '&&', 'ydotool', 'click', 'wheel_down')
+            return self._run_ydotool('click', 'wheel_down')
 
     def scroll_horizontal(self, amount: int) -> bool:
-        # ydotool doesn't have direct horizontal scroll, use key events
-        return False
+        """Scroll horizontally. Positive = right."""
+        if not self._initialized:
+            return False
+        if amount > 0:
+            return self._run_ydotool('click', 'wheel_right')
+        else:
+            return self._run_ydotool('click', 'wheel_left')
 
     def cleanup(self):
         self._initialized = False

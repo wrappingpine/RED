@@ -11,11 +11,39 @@ Head coordinate system:
 
 import numpy as np
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Optional, Tuple
 from .face_tracker import Face, FaceLandmark
 
 logger = logging.getLogger(__name__)
+
+
+class _RateLimitedLogger:
+    """Rate-limited logger to prevent spam from geometry warnings."""
+    
+    def __init__(self, min_interval: float = 1.0):
+        self._min_interval = min_interval
+        self._last_log: Dict[str, float] = {}
+    
+    def warn(self, key: str, message: str):
+        """Log a warning at most once per min_interval seconds."""
+        now = time.time()
+        last = self._last_log.get(key, 0.0)
+        if now - last >= self._min_interval:
+            logger.warning(message)
+            self._last_log[key] = now
+    
+    def info(self, key: str, message: str):
+        """Log an info at most once per min_interval seconds."""
+        now = time.time()
+        last = self._last_log.get(key, 0.0)
+        if now - last >= self._min_interval:
+            logger.info(message)
+            self._last_log[key] = now
+
+
+_rate_logger = _RateLimitedLogger(min_interval=2.0)
 
 
 @dataclass
@@ -108,6 +136,11 @@ class HeadCoordinateSystem:
         # Recompute up to be perfectly orthogonal: up = cross(forward, right)
         # (forward, right in camera coords gives up in camera coords for right-handed system)
         up = np.cross(forward, right)
+        up_norm = np.linalg.norm(up)
+        if up_norm < 1e-6:
+            up = np.array([0.0, -1.0, 0.0], dtype=np.float32)
+        else:
+            up = up / up_norm
 
         # Verify orthonormality
         cls._verify_basis(forward, right, up)
@@ -118,6 +151,9 @@ class HeadCoordinateSystem:
             forward = cls._lerp_vector(forward, prev_coords.forward, smoothing_alpha)
             right = cls._lerp_vector(right, prev_coords.right, smoothing_alpha)
             up = cls._lerp_vector(up, prev_coords.up, smoothing_alpha)
+
+            # Re-orthonormalize after smoothing (smoothing breaks orthonormality)
+            forward, right, up = cls._orthonormalize(forward, right, up)
 
             # Re-verify after smoothing
             cls._verify_basis(forward, right, up)
@@ -145,25 +181,72 @@ class HeadCoordinateSystem:
         return alpha * current + (1.0 - alpha) * previous
 
     @staticmethod
+    def _orthonormalize(forward: np.ndarray, right: np.ndarray, up: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """
+        Numerically stable orthonormalization of three vectors.
+        
+        Uses the Gram-Schmidt process with forward vector as anchor:
+        1. Normalize forward
+        2. Compute right = normalize(cross(up, forward))
+        3. Compute up = normalize(cross(forward, right))
+        4. Recompute right = normalize(cross(up, forward))
+        
+        Handles degenerate cases safely.
+        """
+        # Normalize forward
+        f_norm = np.linalg.norm(forward)
+        if f_norm < 1e-8:
+            forward = np.array([0.0, 0.0, -1.0], dtype=np.float32)
+        else:
+            forward = forward / f_norm
+        
+        # Right = normalize(cross(up, forward))
+        right = np.cross(up, forward)
+        r_norm = np.linalg.norm(right)
+        if r_norm < 1e-8:
+            # Degenerate: up is parallel to forward, use default
+            right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        else:
+            right = right / r_norm
+        
+        # Up = normalize(cross(forward, right))
+        up = np.cross(forward, right)
+        u_norm = np.linalg.norm(up)
+        if u_norm < 1e-8:
+            up = np.array([0.0, -1.0, 0.0], dtype=np.float32)
+        else:
+            up = up / u_norm
+        
+        # Final right = normalize(cross(up, forward)) for perfect orthogonality
+        right = np.cross(up, forward)
+        r_norm = np.linalg.norm(right)
+        if r_norm < 1e-8:
+            right = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+        else:
+            right = right / r_norm
+        
+        return forward, right, up
+
+    @staticmethod
     def _verify_basis(forward: np.ndarray, right: np.ndarray, up: np.ndarray):
         """Verify basis vectors form a valid right-handed orthonormal basis."""
         # Check unit length
         for name, vec in [("forward", forward), ("right", right), ("up", up)]:
             norm = np.linalg.norm(vec)
             if abs(norm - 1.0) > 1e-3:
-                logger.warning(f"{name} vector not unit length: {norm:.6f}")
+                _rate_logger.warn(f"unit_{name}", f"{name} vector not unit length: {norm:.6f}")
 
         # Check orthogonality
         dot_fr = np.dot(forward, right)
         dot_fu = np.dot(forward, up)
         dot_ru = np.dot(right, up)
         if abs(dot_fr) > 1e-3 or abs(dot_fu) > 1e-3 or abs(dot_ru) > 1e-3:
-            logger.warning(f"Basis not orthogonal: f·r={dot_fr:.6f}, f·u={dot_fu:.6f}, r·u={dot_ru:.6f}")
+            _rate_logger.warn("orthogonal", f"Basis not orthogonal: f·r={dot_fr:.6f}, f·u={dot_fu:.6f}, r·u={dot_ru:.6f}")
 
         # Check right-handed (det > 0)
         det = np.linalg.det(np.column_stack([right, up, forward]))
         if det < 0:
-            logger.warning(f"Basis not right-handed: det={det:.6f}")
+            _rate_logger.warn("righthanded", f"Basis not right-handed: det={det:.6f}")
 
     def is_valid(self) -> bool:
         """Check if coordinate system is valid."""
