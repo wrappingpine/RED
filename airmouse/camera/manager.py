@@ -7,7 +7,6 @@ Includes auto-exposure/brightness monitoring for consistent hand tracking.
 
 import cv2
 import os
-import sys
 import logging
 import time
 import numpy as np
@@ -17,6 +16,28 @@ from enum import Enum
 
 
 logger = logging.getLogger(__name__)
+
+
+class _suppress_stderr:
+    """Temporarily redirect fd 2 to /dev/null.
+
+    OpenCV writes backend warnings (e.g. "backend is generally available
+    but can't be used to capture by index") to stderr via C-level fprintf,
+    which bypasses Python logging. This silences them for the duration of
+    a probe without swallowing Python exceptions.
+    """
+
+    def __enter__(self):
+        self._stderr = os.dup(2)
+        self._devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(self._devnull, 2)
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        os.dup2(self._stderr, 2)
+        os.close(self._devnull)
+        os.close(self._stderr)
+        return False
 
 
 class CameraErrorType(Enum):
@@ -157,15 +178,17 @@ class CameraManager:
         """
         info = CameraInfo(index=index, device_path=device_path)
 
-        # Try to open with V4L2 backend (preferred on Linux).
-        # Only attempt the default backend on non-Linux systems: on Linux
-        # the default backend silently falls back to X11, which spews
+        # Try V4L2 first for better Linux compatibility.
+        # OpenCV's default backend falls back to X11 on Linux and prints
         # "backend is generally available but can't be used to capture by
-        # index" warnings even when V4L2 devices exist.
-        cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
+        # index" to stderr when V4L2 devices exist but aren't openable by
+        # index. We keep the fallback for portability but silence OpenCV's
+        # stderr during the probe so the terminal isn't spammed.
+        with _suppress_stderr():
+            cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
 
-        if not cap.isOpened() and not sys.platform.startswith("linux"):
-            cap = cv2.VideoCapture(index)
+            if not cap.isOpened():
+                cap = cv2.VideoCapture(index)
 
         if not cap.isOpened():
             info.available = False
@@ -227,14 +250,17 @@ class CameraManager:
         )
 
         # Try V4L2 first for better Linux compatibility.
-        # On Linux the default backend falls back to X11 and spews
-        # warnings when V4L2 devices exist but aren't openable by index,
-        # so only fall back to default on non-Linux systems.
-        self._capture = cv2.VideoCapture(self._settings.device_index, cv2.CAP_V4L2)
+        # OpenCV's default backend falls back to X11 on Linux and prints
+        # "backend is generally available but can't be used to capture by
+        # index" to stderr when V4L2 devices exist but aren't openable by
+        # index. We keep the fallback for portability but silence OpenCV's
+        # stderr during the open so the terminal isn't spammed.
+        with _suppress_stderr():
+            self._capture = cv2.VideoCapture(self._settings.device_index, cv2.CAP_V4L2)
 
-        if not self._capture.isOpened() and not sys.platform.startswith("linux"):
-            logger.warning("V4L2 backend failed, trying default backend")
-            self._capture = cv2.VideoCapture(self._settings.device_index)
+            if not self._capture.isOpened():
+                logger.warning("V4L2 backend failed, trying default backend")
+                self._capture = cv2.VideoCapture(self._settings.device_index)
 
         if not self._capture.isOpened():
             logger.error(f"Failed to open camera {self._settings.device_index}")
