@@ -178,35 +178,35 @@ class CameraManager:
         """
         info = CameraInfo(index=index, device_path=device_path)
 
-        # Try V4L2 first for better Linux compatibility.
-        # OpenCV's default backend falls back to X11 on Linux and prints
-        # "backend is generally available but can't be used to capture by
-        # index" to stderr when V4L2 devices exist but aren't openable by
-        # index. We keep the fallback for portability but silence OpenCV's
-        # stderr during the probe so the terminal isn't spammed.
+        # OpenCV's default backend (and Intel RealSense's obsensor_uvc
+        # plugin) print backend-specific diagnostics to stderr via C-level
+        # fprintf, bypassing Python logging. Wrap the whole probe so the
+        # terminal isn't spammed during detection; we keep the fallback
+        # for portability on non-V4L2 systems.
         with _suppress_stderr():
+            # Try V4L2 first for better Linux compatibility.
             cap = cv2.VideoCapture(index, cv2.CAP_V4L2)
 
             if not cap.isOpened():
                 cap = cv2.VideoCapture(index)
 
-        if not cap.isOpened():
-            info.available = False
-            info.error = "Cannot open camera (permission denied or device busy)"
-            # Check specific error type
-            if not os.access(device_path, os.R_OK | os.W_OK):
-                info.error = "Permission denied on device"
-            return info
+            if not cap.isOpened():
+                info.available = False
+                info.error = "Cannot open camera (permission denied or device busy)"
+                # Check specific error type
+                if not os.access(device_path, os.R_OK | os.W_OK):
+                    info.error = "Permission denied on device"
+                return info
 
-        # Get camera properties
-        info.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        info.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        info.fps = cap.get(cv2.CAP_PROP_FPS)
+            # Get camera properties
+            info.width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            info.height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            info.fps = cap.get(cv2.CAP_PROP_FPS)
 
-        # Try to get camera name via v4l2-ctl if available
-        info.name = self._get_camera_name(device_path)
+            # Try to get camera name via v4l2-ctl if available
+            info.name = self._get_camera_name(device_path)
 
-        cap.release()
+            cap.release()
         return info
 
     def _get_camera_name(self, device_path: str) -> str:
