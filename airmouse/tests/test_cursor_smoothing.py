@@ -75,8 +75,8 @@ class TestCursorController:
         assert dx != 0
 
     def test_sensitivity_normal(self):
-        """Test NORMAL sensitivity (0.40)."""
-        config = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0)
+        """Test NORMAL sensitivity (0.32)."""
+        config = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0, max_velocity=999999)
         controller = CursorController(config)
 
         # Establish reference at center
@@ -89,9 +89,9 @@ class TestCursorController:
         assert dx > 0
 
     def test_sensitivity_precision(self):
-        """Test PRECISION sensitivity (0.15) produces less movement."""
-        config_normal = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0)
-        config_precision = CursorConfig(sensitivity_mode=SensitivityMode.PRECISION, dead_zone_radius=0.0)
+        """Test PRECISION sensitivity (0.12) produces less movement."""
+        config_normal = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0, max_velocity=999999)
+        config_precision = CursorConfig(sensitivity_mode=SensitivityMode.PRECISION, dead_zone_radius=0.0, max_velocity=999999)
 
         controller_normal = CursorController(config_normal)
         controller_precision = CursorController(config_precision)
@@ -107,9 +107,9 @@ class TestCursorController:
         assert dx_precision < dx_normal
 
     def test_sensitivity_fast(self):
-        """Test FAST sensitivity (0.60) produces more movement."""
-        config_normal = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0)
-        config_fast = CursorConfig(sensitivity_mode=SensitivityMode.FAST, dead_zone_radius=0.0)
+        """Test FAST sensitivity (0.48) produces more movement."""
+        config_normal = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0, max_velocity=999999)
+        config_fast = CursorConfig(sensitivity_mode=SensitivityMode.FAST, dead_zone_radius=0.0, max_velocity=999999)
 
         controller_normal = CursorController(config_normal)
         controller_fast = CursorController(config_fast)
@@ -126,7 +126,7 @@ class TestCursorController:
 
     def test_acceleration_curve(self):
         """Test acceleration curve (1.2) increases movement non-linearly."""
-        config = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0, acceleration=1.2)
+        config = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0, acceleration=1.2, max_velocity=999999)
         controller = CursorController(config)
 
         # Establish reference at center
@@ -162,7 +162,7 @@ class TestCursorController:
 
     def test_sensitivity_mode_switching(self):
         """Test switching sensitivity modes at runtime."""
-        config = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0)
+        config = CursorConfig(sensitivity_mode=SensitivityMode.NORMAL, dead_zone_radius=0.0, max_velocity=999999)
         controller = CursorController(config)
 
         controller.get_relative_movement_from_plane(0.0, 0.0)

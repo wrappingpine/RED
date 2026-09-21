@@ -773,6 +773,61 @@ class AirMouseController:
             "new": new.name
         })
 
+    def calibrate(self) -> bool:
+        """
+        Run calibration sequence (§26).
+
+        Returns True if calibration completed successfully.
+        """
+        if self.state == AirMouseState.RUNNING:
+            logger.warning("Cannot calibrate while running")
+            return False
+
+        if not self.hand_tracker:
+            logger.error("Hand tracker not initialized")
+            return False
+
+        from airmouse.vision.calibration import Calibrator, CalibrationConfig, CalibrationPhase, apply_calibration
+
+        calibrator = Calibrator(CalibrationConfig())
+        calibrator.set_callback(self._on_calibration_phase)
+
+        # Process frames through calibrator
+        calibrator.start()
+        max_frames = 300
+        frame_count = 0
+
+        while calibrator.phase != CalibrationPhase.COMPLETE and frame_count < max_frames:
+            if self._stop_event.is_set():
+                calibrator.cancel()
+                break
+
+            hand = self._get_current_hand()
+            calibrator.process(hand)
+            frame_count += 1
+            time.sleep(0.05)  # Simulate frame processing
+
+        result = calibrator.result
+        if result.completed:
+            apply_calibration(result, self.config.cursor)
+            logger.info("Calibration completed successfully")
+            return True
+        else:
+            logger.warning("Calibration did not complete")
+            return False
+
+    def _on_calibration_phase(self, phase):
+        """Callback for calibration phase changes."""
+        logger.info(f"Calibration phase: {phase.name}")
+        if self.status_callback:
+            self.status_callback("calibration", {"phase": phase.name})
+
+    def _get_current_hand(self) -> Optional[Hand]:
+        """Get the most recent detected hand."""
+        if self.hand_tracker and hasattr(self.hand_tracker, 'last_hand'):
+            return self.hand_tracker.last_hand
+        return None
+
     def _run_loop(self):
         """Main processing loop with frame coordination."""
         frame_interval = 1.0 / self.config.target_fps
