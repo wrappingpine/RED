@@ -759,6 +759,10 @@ class GlobalHotkeyManager(QObject):
     def get_backend_type(self) -> HotkeyBackend:
         return self._backend_type
 
+    def get_registered_hotkeys(self) -> List[str]:
+        """Get list of registered hotkey IDs."""
+        return list(self._hotkeys.keys())
+
     def is_initialized(self) -> bool:
         return self._initialized
 

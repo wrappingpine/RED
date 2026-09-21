@@ -429,7 +429,9 @@ class SafetyManager:
             level=SafetyLevel.EMERGENCY,
             details="Emergency stop triggered"
         )
-        self._record_event(event)
+        self._event_history.append(event)
+        if len(self._event_history) > self._max_history:
+            self._event_history.pop(0)
 
         # Notify callbacks
         for callback in self._callbacks:
