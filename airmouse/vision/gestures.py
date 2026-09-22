@@ -448,12 +448,9 @@ class GestureRecognizer:
                 self._state.left_pinch_start_time = current_time
                 self._state.left_pinch_start_pos = primary_hand.index_tip
                 self._state.left_pinch_was_drag = False
-                # Emit LEFT_CLICK (pinch start) event
-                events.append(GestureEvent(
-                    gesture_type=GestureType.LEFT_CLICK,
-                    hand=primary_hand,
-                    timestamp=current_time
-                ))
+                # Do NOT emit LEFT_CLICK here - click is emitted on release
+                # (see _end_left_pinch). This prevents duplicate clicks.
+                # A single physical pinch produces exactly one logical click.
         else:
             # Pinch active - check confirm/release
             if not self._state.left_pinch_confirmed:

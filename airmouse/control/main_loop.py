@@ -1139,10 +1139,37 @@ class AirMouseController:
 
     def _handle_gestures(self, events: List[GestureEvent],
                          rel_movement: Optional[tuple], hands: List[TrackedHand]):
-        """Handle gesture events and move mouse."""
+        """Handle gesture events and move mouse.
+        
+        §48: Single safety gate before desktop input. All input goes through
+        this gate which validates:
+        - Tracking stability (loss tracking prevents invalid frames)
+        - Confidence thresholds (per §53)
+        - Gesture safety (high-risk actions need higher confidence)
+        
+        Returns:
+            bool: True if any input was delivered, False otherwise
+        """
         if not self.input_manager:
-            return
+            return False
 
+        # Determine if we should deliver any input at all
+        should_deliver_input = self._should_deliver_input(
+            rel_movement, events, hands
+        )
+        
+        if not should_deliver_input:
+            # Even if we have events, confidence/state might block them
+            # Release any held buttons from previous successful operations
+            if any(event.gesture_type in (GestureType.DRAG_START, GestureType.LEFT_CLICK, 
+                                        GestureType.RIGHT_CLICK, GestureType.MIDDLE_CLICK)
+                   for event in events):
+                self.input_manager.release_all()
+            return False
+
+        # Safe to deliver input - proceed with caution
+        input_delivered = False
+        
         # Move cursor if we have relative movement
         if rel_movement and (rel_movement[0] != 0 or rel_movement[1] != 0):
             self.input_manager.move(rel_movement[0], rel_movement[1])
@@ -1150,44 +1177,56 @@ class AirMouseController:
             # detector (and velocity limiter) see the real cursor.
             x, y = self._cursor_position
             self._cursor_position = (x + rel_movement[0], y + rel_movement[1])
-
-        # Notify GUI with processed frame and hands
-        if self.on_frame_processed:
-            self.on_frame_processed(self._last_frame, hands)
+            input_delivered = True
 
         # Process gesture events
         for event in events:
-            if self.on_gesture:
-                self.on_gesture(event)
+            if not self._is_safe_gesture_event(event):
+                continue
+                
+            # High-risk gestures need higher confidence validation
+            if event.gesture_type in (GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
+                                    GestureType.MIDDLE_CLICK):
+                # Double-check confidence for clicks
+                if not self._has_sufficient_confidence_for_click():
+                    logger.warning(f"Click blocked: insufficient confidence for {event.gesture_type.name}")
+                    continue
 
             if event.gesture_type == GestureType.LEFT_CLICK:
                 self.input_manager.click(1)
+                input_delivered = True
                 logger.debug("Left click")
 
             elif event.gesture_type == GestureType.RIGHT_CLICK:
                 self.input_manager.click(3)
+                input_delivered = True
                 logger.debug("Right click")
 
             elif event.gesture_type == GestureType.MIDDLE_CLICK:
                 self.input_manager.click(2)
+                input_delivered = True
                 logger.debug("Middle click")
 
             elif event.gesture_type == GestureType.DRAG_START:
                 self.input_manager.button_down(1)
+                input_delivered = True
                 logger.debug("Drag start")
 
             elif event.gesture_type == GestureType.DRAG_END:
                 self.input_manager.button_up(1)
+                input_delivered = True
                 logger.debug("Drag end")
 
             elif event.gesture_type == GestureType.SCROLL_UP:
                 amount = event.data.get("amount", 3)
                 self.input_manager.scroll(amount)
+                input_delivered = True
                 logger.debug(f"Scroll up: {amount}")
 
             elif event.gesture_type == GestureType.SCROLL_DOWN:
                 amount = event.data.get("amount", 3)
                 self.input_manager.scroll(-amount)
+                input_delivered = True
                 logger.debug(f"Scroll down: {amount}")
 
             elif event.gesture_type == GestureType.PINCH_END:
@@ -1195,21 +1234,97 @@ class AirMouseController:
                 original = event.data.get("original_gesture")
                 if original == GestureType.LEFT_CLICK:
                     self.input_manager.button_up(1)
+                    input_delivered = True
                     logger.debug("Left click release (pinch end)")
                 elif original == GestureType.RIGHT_CLICK:
                     self.input_manager.button_up(3)
+                    input_delivered = True
                     logger.debug("Right click release (pinch end)")
                 elif original == GestureType.MIDDLE_CLICK:
                     self.input_manager.button_up(2)
+                    input_delivered = True
                     logger.debug("Middle click release (pinch end)")
 
             elif event.gesture_type == GestureType.PAUSE_TRACKING:
                 self.pause()
+                input_delivered = True
                 logger.info("Tracking paused (fist)")
 
             elif event.gesture_type == GestureType.RESUME_TRACKING:
                 self.resume()
+                input_delivered = True
                 logger.info("Tracking resumed")
+
+        # Notify GUI with processed frame and hands
+        if self.on_frame_processed:
+            self.on_frame_processed(self._last_frame, hands)
+
+        return input_delivered
+
+    def _should_deliver_input(self,
+                              rel_movement: Optional[tuple],
+                              events: List[GestureEvent],
+                              hands: List[TrackedHand]) -> bool:
+        """
+        Single safety gate: decide if ANY input should be delivered this frame.
+        
+        Returns False if:
+        - Tracking is lost (hand not reliably tracked)
+        - Input device is unhealthy
+        - Confidence state blocks all input
+        """
+        # Check input device health
+        if self.input_manager and not self.input_manager.is_healthy():
+            logger.warning("Input gate: device unhealthy")
+            return False
+
+        # Check tracking status
+        if self._tracking_status.phase == TrackingPhase.LOST:
+            return False
+
+        # Check if we have any valid tracking state
+        if self._tracking_status.phase == TrackingPhase.STARTING:
+            return False
+
+        # Check if confidence state allows input
+        if not self._tracking_status.get_gesture_permission():
+            # Still allow movement if it's just cursor motion without gestures
+            has_gestures = len(events) > 0
+            has_movement = rel_movement and (rel_movement[0] != 0 or rel_movement[1] != 0)
+            if not has_movement and not has_gestures:
+                return False
+
+        return True
+
+    def _is_safe_gesture_event(self, event: GestureEvent) -> bool:
+        """
+        Check if a gesture event is safe to execute.
+        
+        Blocks:
+        - Events with very low confidence
+        - Events that don't match the tracking state
+        """
+        # Low confidence events are filtered earlier, but double-check
+        if hasattr(event, 'confidence') and event.confidence is not None:
+            if event.confidence < 0.3:
+                return False
+
+        # Don't execute PAUSE/RESUME if already in that state
+        if event.gesture_type == GestureType.PAUSE_TRACKING:
+            return self.state == AirMouseState.RUNNING
+        if event.gesture_type == GestureType.RESUME_TRACKING:
+            return self.state == AirMouseState.PAUSED
+
+        return True
+
+    def _has_sufficient_confidence_for_click(self) -> bool:
+        """
+        Check if we have sufficient confidence for click gestures.
+        
+        Per §53: high-risk actions (clicks, drags) require HIGH confidence.
+        """
+        conf_state = self._tracking_status.confidence.state
+        return conf_state.value >= 2  # HIGH (2) or VERY_HIGH (3)
 
     def toggle_debug_overlay(self):
         """Toggle the performance debug overlay."""

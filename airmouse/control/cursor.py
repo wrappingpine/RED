@@ -123,7 +123,7 @@ class OneEuroFilter:
     def filter(self, x: float, t: Optional[float] = None) -> float:
         """Filter a value with timestamp."""
         if t is None:
-            t = time.time()
+            t = time.monotonic()
 
         if self.x_prev is None:
             self.x_prev = x
@@ -213,7 +213,11 @@ class CursorController:
         self._last_position: Optional[Tuple[float, float]] = None
         self._last_time: Optional[float] = None
         self._is_active = False
-        self._reference_point: Optional[Tuple[float, float]] = None  # Initial hand position
+        self._reference_point: Optional[Tuple[float, float]] = None  # Initial hand position (calibration zero)
+        self._last_plane_position: Optional[Tuple[float, float]] = None  # Previous frame plane position (for frame-to-frame deltas)
+        # Fractional accumulator for subpixel cursor movement (§17)
+        self._accumulator_x: float = 0.0
+        self._accumulator_y: float = 0.0
 
     def update_screen_size(self, width: int, height: int):
         """Update screen dimensions."""
@@ -314,7 +318,8 @@ class CursorController:
         if not ref_point:
             return None
 
-        current_time = time.time()
+        # Use monotonic clock for runtime timing (§18)
+        now = time.monotonic()
 
         # Convert to normalized coordinates relative to camera frame
         # Hand landmarks are already normalized (0-1)
@@ -346,8 +351,9 @@ class CursorController:
         screen_x, screen_y = self._normalize_to_screen(x_norm, y_norm)
 
         # Apply velocity clamping (§24)
+        # dt = now - previous_time (§18: compute dt BEFORE updating timestamp)
         if self._last_position is not None:
-            dt = max(current_time - self._last_time, 0.001)
+            dt = max(now - self._last_time, 0.001)
             dx = screen_x - self._last_position[0]
             dy = screen_y - self._last_position[1]
             dx, dy = self._clamp_velocity(dx, dy, dt)
@@ -362,8 +368,9 @@ class CursorController:
         # Convert to integers
         result = (int(screen_x), int(screen_y))
 
+        # Update state AFTER computing dt (§18)
         self._last_position = result
-        self._last_time = current_time
+        self._last_time = now
         self._is_active = True
 
         return result
@@ -405,6 +412,10 @@ class CursorController:
         """
         Get relative mouse movement from normalized plane coordinates (head-relative mode).
 
+        Uses frame-to-frame deltas: delta = current - previous_frame_position.
+        The _reference_point is the calibration zero point (initial hand position),
+        used only to establish the first previous_frame_position.
+
         Args:
             x_norm: Normalized X position on virtual plane (0-1)
             y_norm: Normalized Y position on virtual plane (0-1)
@@ -412,22 +423,31 @@ class CursorController:
         Returns:
             (dx, dy) relative movement in screen pixels for uinput, or None
         """
-        current_time = time.time()
+        current_time = time.monotonic()
 
-        # Initialize reference point on first frame
+        # Initialize reference point and previous frame position on first call
         if self._reference_point is None:
             self._reference_point = (x_norm, y_norm)
+            self._last_plane_position = (x_norm, y_norm)
             self._last_time = current_time
             return (0, 0)  # No movement on first frame
 
-        # Calculate delta from reference point
-        dx = x_norm - self._reference_point[0]
-        dy = y_norm - self._reference_point[1]
+        # Frame-to-frame delta (§4.1): delta = current - previous_frame
+        # NOT delta = current - initial_reference
+        if self._last_plane_position is None:
+            self._last_plane_position = (x_norm, y_norm)
+            return (0, 0)
+
+        dx = x_norm - self._last_plane_position[0]
+        dy = y_norm - self._last_plane_position[1]
+
+        # Update previous frame position for next call
+        self._last_plane_position = (x_norm, y_norm)
 
         # Apply dead zone
         dx, dy = self._apply_dead_zone(dx, dy)
         if dx == 0.0 and dy == 0.0:
-            return None
+            return (0, 0)
 
         # Apply sensitivity and acceleration
         dx, dy = self._apply_sensitivity(dx, dy)
@@ -442,7 +462,19 @@ class CursorController:
         screen_dx, screen_dy = self._clamp_velocity(screen_dx, screen_dy, dt)
 
         self._last_time = current_time
-        return (int(screen_dx), int(screen_dy))
+
+        # Fractional accumulator (§17): maintain subpixel remainder
+        # to prevent cursor stickiness from int() truncation.
+        # int() truncates toward zero, so subtracting the truncated
+        # value gives the correct remainder for both signs.
+        self._accumulator_x += screen_dx
+        self._accumulator_y += screen_dy
+        out_x = int(self._accumulator_x)
+        out_y = int(self._accumulator_y)
+        self._accumulator_x -= out_x
+        self._accumulator_y -= out_y
+
+        return (out_x, out_y)
 
     def reset(self):
         """Reset controller state."""
@@ -450,6 +482,9 @@ class CursorController:
         self._last_time = None
         self._is_active = False
         self._reference_point = None
+        self._last_plane_position = None
+        self._accumulator_x = 0.0
+        self._accumulator_y = 0.0
         if hasattr(self._smoother_x, 'reset'):
             self._smoother_x.reset()
             self._smoother_y.reset()

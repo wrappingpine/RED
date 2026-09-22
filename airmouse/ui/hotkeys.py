@@ -323,9 +323,19 @@ class X11HotkeyBackend(HotkeyBackendBase):
                 # Check modifiers (ignore lock bits)
                 effective_state = state & ~(X.LockMask | X.Mod2Mask)
                 if effective_state == mod_mask:
-                    # Found matching hotkey - trigger callback
-                    # We need to call the callback somehow...
-                    # This would need integration with the manager
+                    # Found matching hotkey - invoke the registered callback
+                    # §11 P0 fix: actually call the callback, not just log
+                    callback = self._manager._callbacks.get(hotkey_id) if self._manager else None
+                    if callback:
+                        try:
+                            # Execute callback in a separate thread to avoid
+                            # blocking the X11 event loop
+                            t = threading.Thread(target=callback, daemon=True)
+                            t.start()
+                        except Exception as e:
+                            logger.error(f"Hotkey callback error for {hotkey_id}: {e}")
+                    else:
+                        logger.warning(f"Hotkey {hotkey_id} triggered but no callback registered")
                     logger.debug(f"Hotkey triggered: {hotkey_id}")
 
     def cleanup(self):
@@ -677,27 +687,29 @@ class GlobalHotkeyManager(QObject):
         self._initialized = False
 
     def detect_best_backend(self) -> HotkeyBackend:
-        """Detect the best available hotkey backend."""
-        backends = [
-            (HotkeyBackend.X11, X11HotkeyBackend()),
-            (HotkeyBackend.EVDEV, EvdevHotkeyBackend()),
-            (HotkeyBackend.PORTAL, PortalHotkeyBackend()),
-        ]
+        """Detect the best available hotkey backend (does NOT initialize).
 
-        for backend_type, backend in backends:
-            if backend.is_available():
-                logger.info(f"Hotkey backend {backend_type.value} available")
-                if backend.initialize():
-                    logger.info(f"Hotkey backend {backend_type.value} initialized")
-                    return backend_type
-                else:
-                    logger.warning(f"Hotkey backend {backend_type.value} failed to initialize")
+        §12 P0 fix: only checks availability, does not create or initialize
+        backends. The actual backend is created and initialized exactly once
+        in initialize().
+        """
+        # Check availability without creating/initializing backends
+        if X11HotkeyBackend().is_available():
+            return HotkeyBackend.X11
+        if EvdevHotkeyBackend().is_available():
+            return HotkeyBackend.EVDEV
+        if PortalHotkeyBackend().is_available():
+            return HotkeyBackend.PORTAL
 
         logger.warning("No hotkey backend available")
         return HotkeyBackend.NONE
 
     def initialize(self) -> bool:
-        """Initialize the hotkey manager."""
+        """Initialize the hotkey manager.
+
+        §12 P0 fix: creates and initializes the backend exactly once.
+        No backend is created and thrown away.
+        """
         if self._initialized:
             return True
 
@@ -712,6 +724,10 @@ class GlobalHotkeyManager(QObject):
         else:
             logger.error("No hotkey backend available")
             return False
+
+        # Give the backend a reference to the manager so it can
+        # look up callbacks when a hotkey is triggered (§11 P0 fix)
+        self._backend._manager = self
 
         if not self._backend.initialize():
             self._backend = None

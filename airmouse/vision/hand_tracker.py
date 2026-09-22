@@ -7,6 +7,7 @@ Provides hand landmarks, finger states, and gesture primitives.
 
 import cv2
 import numpy as np
+import math
 import logging
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Dict
@@ -122,13 +123,105 @@ class Hand:
         }
 
     def _is_finger_extended(self, tip: HandLandmark, pip: HandLandmark, mcp: HandLandmark) -> bool:
-        """Check if finger is extended (tip above PIP joint in y)."""
-        # For thumb, use different logic (check x distance from palm)
-        if tip == HandLandmark.THUMB_TIP:
-            return self.landmarks[tip.value].x < self.landmarks[mcp.value].x - 0.02
+        """
+        Check if a finger is extended using joint-vector geometry.
 
-        # For other fingers: tip y < pip y (higher up in image = smaller y)
-        return self.landmarks[tip.value].y < self.landmarks[pip.value].y - 0.015
+        Uses the angle between the MCP→PIP vector and PIP→TIP vector.
+        An extended finger has a large angle (near 180°) between the
+        two segments. A folded finger has a small angle (near 0-60°).
+
+        This is orientation-independent: it works for left/right hands,
+        rotated hands, tilted hands, and different camera positions.
+        """
+        if tip == HandLandmark.THUMB_TIP:
+            return self._is_thumb_extended()
+
+        if len(self.landmarks) < 21:
+            return False
+
+        # Get landmark positions
+        lm_tip = self.landmarks[tip.value]
+        lm_pip = self.landmarks[pip.value]
+        lm_mcp = self.landmarks[mcp.value]
+
+        # Vector from PIP to TIP
+        v_pip_tip = np.array([
+            lm_tip.x - lm_pip.x,
+            lm_tip.y - lm_pip.y,
+            lm_tip.z - lm_pip.z
+        ], dtype=np.float64)
+
+        # Vector from MCP to PIP
+        v_mcp_pip = np.array([
+            lm_pip.x - lm_mcp.x,
+            lm_pip.y - lm_mcp.y,
+            lm_pip.z - lm_mcp.z
+        ], dtype=np.float64)
+
+        # Compute the angle between the two vectors
+        dot = np.dot(v_pip_tip, v_mcp_pip)
+        norm_tip = np.linalg.norm(v_pip_tip)
+        norm_mcp = np.linalg.norm(v_mcp_pip)
+
+        if norm_tip < 1e-8 or norm_mcp < 1e-8:
+            return False
+
+        cos_angle = dot / (norm_tip * norm_mcp)
+        # Clamp to [-1, 1] to avoid numerical errors
+        cos_angle = max(-1.0, min(1.0, cos_angle))
+        angle_rad = math.acos(cos_angle)
+        angle_deg = math.degrees(angle_rad)
+
+        # Extended finger: angle < 40° (near straight, vectors aligned)
+        # Folded finger: angle > 90° (bent at PIP, vectors opposite)
+        return angle_deg < 40.0
+
+    def _is_thumb_extended(self) -> bool:
+        """
+        Check if thumb is extended using joint-vector geometry.
+
+        Uses the angle between the MCP→IP vector and MCP→index MCP vector.
+        The thumb has a different kinematic structure: when extended,
+        it points away from the palm; when folded, it points toward
+        the index finger MCP.
+        """
+        if len(self.landmarks) < 5:
+            return False
+
+        lm_cmc = self.landmarks[HandLandmark.THUMB_CMC.value]
+        lm_mcp = self.landmarks[HandLandmark.THUMB_MCP.value]
+        lm_ip = self.landmarks[HandLandmark.THUMB_IP.value]
+        lm_index_mcp = self.landmarks[HandLandmark.INDEX_MCP.value]
+
+        # Vector from MCP to IP
+        v_mcp_ip = np.array([
+            lm_ip.x - lm_mcp.x,
+            lm_ip.y - lm_mcp.y,
+            lm_ip.z - lm_mcp.z
+        ], dtype=np.float64)
+
+        # Vector from MCP to index MCP (reference direction)
+        v_mcp_index = np.array([
+            lm_index_mcp.x - lm_mcp.x,
+            lm_index_mcp.y - lm_mcp.y,
+            lm_index_mcp.z - lm_mcp.z
+        ], dtype=np.float64)
+
+        dot = np.dot(v_mcp_ip, v_mcp_index)
+        norm_ip = np.linalg.norm(v_mcp_ip)
+        norm_index = np.linalg.norm(v_mcp_index)
+
+        if norm_ip < 1e-8 or norm_index < 1e-8:
+            return False
+
+        cos_angle = dot / (norm_ip * norm_index)
+        cos_angle = max(-1.0, min(1.0, cos_angle))
+        angle_rad = math.acos(cos_angle)
+        angle_deg = math.degrees(angle_rad)
+
+        # Extended thumb: angle > 90° (pointing away from index MCP)
+        # Folded thumb: angle < 60° (pointing toward index MCP)
+        return angle_deg > 90.0
 
     @property
     def palm_center(self) -> Optional[Landmark]:
@@ -361,24 +454,24 @@ class HandTracker:
         """Convert MediaPipe results to our Hand objects (optimized for low allocation)."""
         hands = []
 
-        # Pre-allocate output landmark list to reuse across hands (max 1 hand in our config)
-        if not hasattr(self, '_hand_landmarks_output'):
-            self._hand_landmarks_output = [Landmark(0.0, 0.0, 0.0) for _ in range(21)]
-
         if result.hand_landmarks:
             for i, (hand_landmarks, handedness_list) in enumerate(zip(
                 result.hand_landmarks,
                 result.handedness
             )):
-                # Reuse pre-allocated output list - copy values directly
-                output_landmarks = self._hand_landmarks_output
+                # Create independent landmark list for each hand (§6 P0 fix).
+                # Previously a shared mutable list was reused, so modifying
+                # hand[1].landmarks would corrupt hand[0].landmarks.
                 num_landmarks = min(len(hand_landmarks), 21)
-                for j in range(num_landmarks):
-                    lm = hand_landmarks[j]
-                    output_landmarks[j].x = lm.x
-                    output_landmarks[j].y = lm.y
-                    output_landmarks[j].z = lm.z
-                    output_landmarks[j].visibility = 1.0
+                output_landmarks = [
+                    Landmark(
+                        x=hand_landmarks[j].x,
+                        y=hand_landmarks[j].y,
+                        z=hand_landmarks[j].z,
+                        visibility=1.0
+                    )
+                    for j in range(num_landmarks)
+                ]
 
                 # Get handedness
                 hand_label = "Unknown"
@@ -392,7 +485,7 @@ class HandTracker:
                     continue
 
                 hand = Hand(
-                    landmarks=output_landmarks[:num_landmarks],
+                    landmarks=output_landmarks,
                     handedness=hand_label,
                     confidence=hand_confidence
                 )

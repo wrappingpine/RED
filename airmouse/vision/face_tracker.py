@@ -40,6 +40,7 @@ class Face:
     """Detected face with landmarks and derived head pose."""
     landmarks: List[FaceLandmark] = field(default_factory=list)
     confidence: float = 0.0
+    stale: bool = False  # True if face is from grace period (not fresh detection)
 
     # Derived properties (computed on demand)
     _eye_midpoint: Optional[FaceLandmark] = None
@@ -356,10 +357,23 @@ class FaceTracker:
 
             if (self._last_valid_face is not None and
                     self._frames_since_valid_face <= self.settings.grace_period_frames):
-                # Return last valid face during grace period
+                # Return a COPY of last valid face during grace period, marked stale
                 logger.debug(f"Face lost - grace period frame {self._frames_since_valid_face}/"
                            f"{self.settings.grace_period_frames}")
-                return [self._last_valid_face]
+                # Deep copy landmarks to avoid sharing state
+                stale_landmarks = [
+                    FaceLandmark(
+                        x=lm.x, y=lm.y, z=lm.z,
+                        visibility=lm.visibility, presence=lm.presence
+                    )
+                    for lm in self._last_valid_face.landmarks
+                ]
+                stale_face = Face(
+                    landmarks=stale_landmarks,
+                    confidence=self._last_valid_face.confidence,
+                    stale=True
+                )
+                return [stale_face]
             else:
                 # Grace period expired - clear last valid face
                 if self._frames_since_valid_face > self.settings.grace_period_frames:
@@ -411,7 +425,8 @@ class FaceTracker:
             # Create smoothed face
             smoothed_face = Face(
                 landmarks=self._smoothed_landmarks[:len(faces[0].landmarks)],
-                confidence=faces[0].confidence
+                confidence=faces[0].confidence,
+                stale=False
             )
 
             # Cache as last valid face
@@ -419,48 +434,101 @@ class FaceTracker:
             return [smoothed_face]
 
     def _convert_results(self, result: mp_vision.FaceLandmarkerResult) -> List[Face]:
-        """Convert MediaPipe results to our Face objects (optimized for low allocation)."""
+        """Convert MediaPipe results to our Face objects (no shared state)."""
         faces = []
 
         if result.face_landmarks:
-            # Pre-allocate single landmark list to reuse across faces (max 1 face in our config)
-            if not hasattr(self, '_face_landmarks_output'):
-                self._face_landmarks_output = [FaceLandmark(0.0, 0.0, 0.0) for _ in range(468)]
-
             for i, face_landmarks in enumerate(result.face_landmarks):
-                # Reuse pre-allocated cache
-                cache = self._landmark_cache
+                # Create NEW landmark list for each face (fixes shared state bug)
+                landmarks = []
                 for j, lm in enumerate(face_landmarks):
                     if j < 468:
-                        cache[j].x = lm.x
-                        cache[j].y = lm.y
-                        cache[j].z = lm.z
-                        cache[j].visibility = getattr(lm, 'visibility', 1.0)
-                        cache[j].presence = getattr(lm, 'presence', 1.0)
+                        landmarks.append(FaceLandmark(
+                            x=lm.x,
+                            y=lm.y,
+                            z=lm.z,
+                            visibility=getattr(lm, 'visibility', 1.0),
+                            presence=getattr(lm, 'presence', 1.0)
+                        ))
 
                 # Get confidence from detection score if available
-                confidence = 1.0
-                if result.face_blendshapes and i < len(result.face_blendshapes):
-                    # Use presence as confidence proxy
-                    pass
-
-                # Reuse output list - copy values from cache
-                output_landmarks = self._face_landmarks_output
-                num_landmarks = min(len(face_landmarks), 468)
-                for j in range(num_landmarks):
-                    output_landmarks[j].x = cache[j].x
-                    output_landmarks[j].y = cache[j].y
-                    output_landmarks[j].z = cache[j].z
-                    output_landmarks[j].visibility = cache[j].visibility
-                    output_landmarks[j].presence = cache[j].presence
+                # §8 P0 fix: Do NOT use hardcoded confidence = 1.0.
+                # MediaPipe FaceLandmarker does not expose a direct detection
+                # confidence score in the Tasks API result. We derive a
+                # validity score from landmark presence and blendshape scores.
+                confidence = self._compute_face_confidence(
+                    face_landmarks, result, i
+                )
 
                 face = Face(
-                    landmarks=output_landmarks[:num_landmarks],
+                    landmarks=landmarks,
                     confidence=confidence
                 )
                 faces.append(face)
 
         return faces
+
+    def _compute_face_confidence(
+        self,
+        face_landmarks,
+        result,
+        face_index: int
+    ) -> float:
+        """
+        Derive a face validity score from available MediaPipe signals.
+
+        MediaPipe FaceLandmarker (Tasks API) does not provide a direct
+        detection confidence. We compute a composite score from:
+
+        1. Blendshape category scores (if available) - weighted sum
+        2. Landmark presence/visibility values - mean across all landmarks
+        3. Facial transformation matrix availability
+
+        Returns a score in [0.0, 1.0].
+        """
+        score = 0.0
+        components = 0
+
+        # Component 1: Blendshape scores
+        if result.face_blendshapes and face_index < len(result.face_blendshapes):
+            blendshapes = result.face_blendshapes[face_index]
+            if hasattr(blendshapes, 'categories') and blendshapes.categories:
+                # Use the maximum category score as a signal of detection strength
+                max_score = max(
+                    (c.score for c in blendshapes.categories),
+                    default=0.0
+                )
+                score += max_score * 0.4
+                components += 1
+
+        # Component 2: Mean landmark presence
+        presence_values = []
+        for lm in face_landmarks:
+            pres = getattr(lm, 'presence', None)
+            if pres is not None:
+                presence_values.append(pres)
+        if presence_values:
+            mean_presence = sum(presence_values) / len(presence_values)
+            score += mean_presence * 0.4
+            components += 1
+
+        # Component 3: Mean landmark visibility
+        visibility_values = []
+        for lm in face_landmarks:
+            vis = getattr(lm, 'visibility', None)
+            if vis is not None:
+                visibility_values.append(vis)
+        if visibility_values:
+            mean_visibility = sum(visibility_values) / len(visibility_values)
+            score += mean_visibility * 0.2
+            components += 1
+
+        if components == 0:
+            # No signals available - face is present but we cannot assess quality
+            # Use 0.5 as a conservative default (not 1.0 which would be a lie)
+            return 0.5
+
+        return min(1.0, max(0.0, score))
 
     def draw_landmarks(self, frame: np.ndarray, faces: List[Face],
                        draw_key_points: bool = True,

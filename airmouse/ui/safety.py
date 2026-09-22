@@ -21,6 +21,16 @@ from pathlib import Path
 
 import numpy as np
 
+# Optional X11 focus detection
+try:
+    from Xlib import display as xdisplay
+    from Xlib.xobject.drawable import Window
+    X11_AVAILABLE = True
+except ImportError:
+    X11_AVAILABLE = False
+    xdisplay = None
+    Window = None
+
 logger = logging.getLogger(__name__)
 
 
@@ -216,10 +226,65 @@ class FocusMonitor:
         self._has_focus = True
         self._monitor_thread = None
         self._running = False
+        self._target_window_id: Optional[int] = None
+        self._x11_display = None
+
+        # Try to get our window ID
+        self._initialize_x11()
+
+    def _initialize_x11(self):
+        """Initialize X11 display and find our window."""
+        if not X11_AVAILABLE:
+            logger.debug("X11 not available - focus monitoring disabled")
+            return
+
+        try:
+            self._x11_display = xdisplay.Display()
+            # Find the window with our PID in _NET_WM_PID
+            self._target_window_id = self._find_our_window()
+            if self._target_window_id:
+                logger.info(f"Focus monitor tracking window: 0x{self._target_window_id:x}")
+            else:
+                logger.warning("Could not find Air Mouse window - focus monitoring will check all windows")
+        except Exception as e:
+            logger.debug(f"X11 initialization failed: {e}")
+            self._x11_display = None
+
+    def _find_our_window(self) -> Optional[int]:
+        """Find the window belonging to our process."""
+        import os
+        pid = os.getpid()
+
+        try:
+            root = self._x11_display.screen().root
+            # Get _NET_CLIENT_LIST to find all windows
+            net_client_list = self._x11_display.intern_atom('_NET_CLIENT_LIST')
+            window_list = root.get_full_property(net_client_list, 0)
+
+            if window_list and window_list.value:
+                for win_id in window_list.value:
+                    try:
+                        win = self._x11_display.create_resource_object('window', win_id)
+                        # Check _NET_WM_PID
+                        net_wm_pid = self._x11_display.intern_atom('_NET_WM_PID')
+                        prop = win.get_full_property(net_wm_pid, 0)
+                        if prop and prop.value and len(prop.value) > 0:
+                            if prop.value[0] == pid:
+                                return win_id
+                    except Exception:
+                        continue
+        except Exception as e:
+            logger.debug(f"Failed to find our window: {e}")
+
+        return None
 
     def start(self):
         """Start focus monitoring."""
         if not self._config.enable_focus_loss_pause:
+            return
+
+        if not self._x11_display:
+            logger.warning("Focus monitor: X11 not available, cannot detect focus loss")
             return
 
         self._running = True
@@ -232,6 +297,12 @@ class FocusMonitor:
         self._running = False
         if self._monitor_thread:
             self._monitor_thread.join(timeout=1.0)
+        if self._x11_display:
+            try:
+                self._x11_display.close()
+            except Exception:
+                pass
+            self._x11_display = None
 
     def _monitor_loop(self):
         """Monitor loop."""
@@ -257,10 +328,46 @@ class FocusMonitor:
 
     def _check_focus(self) -> bool:
         """Check if Air Mouse window has focus."""
-        # This is a simplified check - in practice would need to check
-        # if our window or the target application has focus
-        # For now, return True (would integrate with UI)
-        return True
+        if not self._x11_display:
+            return True  # Can't check - assume we have focus
+
+        try:
+            # Get active window
+            net_active_window = self._x11_display.intern_atom('_NET_ACTIVE_WINDOW')
+            root = self._x11_display.screen().root
+            prop = root.get_full_property(net_active_window, 0)
+
+            if not prop or not prop.value or len(prop.value) == 0:
+                return True  # No active window set - assume focus
+
+            active_window_id = prop.value[0]
+
+            # If we don't know our window, check if active window is one of ours
+            if self._target_window_id is None:
+                # Try to find it again
+                self._target_window_id = self._find_our_window()
+
+            # Check if active window is our window
+            if self._target_window_id and active_window_id == self._target_window_id:
+                return True
+
+            # Also check if our window has focus via WM_STATE or other means
+            # Some WMs don't set _NET_ACTIVE_WINDOW properly
+            if self._target_window_id:
+                try:
+                    win = self._x11_display.create_resource_object('window', self._target_window_id)
+                    # Check if window has input focus
+                    focus_win, revert_to = self._x11_display.get_input_focus()
+                    if focus_win == self._target_window_id:
+                        return True
+                except Exception:
+                    pass
+
+            return False
+
+        except Exception as e:
+            logger.debug(f"Focus check error: {e}")
+            return True  # On error, assume focus
 
 
 class InactivityTimer:

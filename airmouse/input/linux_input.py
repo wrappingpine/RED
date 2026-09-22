@@ -787,6 +787,19 @@ class LinuxInputManager:
             self._backend_type = InputBackend.NONE
             self._capabilities = None
 
+    def is_healthy(self) -> bool:
+        """Check if the input manager and its backend are healthy."""
+        with self._lock:
+            if self._backend is None:
+                return False
+            # Check if backend is initialized
+            if hasattr(self._backend, '_initialized') and not self._backend._initialized:
+                return False
+            # For uinput backend, check virtual mouse health
+            if hasattr(self._backend, '_virtual_mouse') and self._backend._virtual_mouse:
+                return self._backend._virtual_mouse.is_healthy()
+            return True
+
     def __enter__(self):
         self.initialize()
         return self
