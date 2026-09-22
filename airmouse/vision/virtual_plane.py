@@ -39,7 +39,7 @@ class VirtualDisplayPlane:
     """
 
     # Plane dimensions (meters)
-    distance: float = 0.30  # 30cm in front of face
+    distance: float = 0.30  # 30cm in front of face (positive Z in head coords = forward)
     width: float = 0.40     # 40cm wide
     height: float = 0.25    # 25cm high (~16:10 aspect)
 
@@ -54,8 +54,8 @@ class VirtualDisplayPlane:
 
     def __post_init__(self):
         """Validate plane parameters."""
-        if self.distance <= 0:
-            raise ValueError("Plane distance must be positive")
+        if self.distance == 0:
+            raise ValueError("Plane distance must be non-zero")
         if self.width <= 0 or self.height <= 0:
             raise ValueError("Plane dimensions must be positive")
         if self.head_coords is not None:
@@ -182,9 +182,18 @@ class VirtualDisplayPlane:
         # ray_origin[2] + t * ray_direction[2] = distance
         # t = (distance - ray_origin[2]) / ray_direction[2]
         #
-        # Ray must point toward positive Z to hit the plane (which is at z=+distance)
+        # NOTE: MediaPipe's camera coordinate system uses NEGATIVE Z for
+        # "forward" (points into the scene), so a fingertip in front of the
+        # face has a MORE NEGATIVE z than the eye.  When transformed to head
+        # coordinates the fingertip therefore has a SMALLER (more negative)
+        # z than the eye, and the ray direction's z component is negative.
+        # The plane sits at z=+distance (positive), so a ray that starts at
+        # the eye (z≈0) and points toward the fingertip (z<0) will never
+        # reach the plane in the +Z direction.  We must therefore accept
+        # rays whose z component is negative as long as they are not
+        # degenerate (|z| > 1e-6).
 
-        if ray_direction_head[2] <= 1e-6:  # Ray not pointing toward plane (positive Z)
+        if abs(ray_direction_head[2]) <= 1e-6:  # Ray parallel to plane
             return None
 
         t = (self.distance - ray_origin_head[2]) / ray_direction_head[2]

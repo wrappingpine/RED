@@ -73,7 +73,7 @@ class TrackingConfig:
     confidence_threshold: float = 0.75
     min_face_confidence: float = 0.5
     use_head_relative: bool = True
-    virtual_plane_distance: float = 0.30
+    virtual_plane_distance: float = 0.30  # positive Z in head coords (30cm in front)
     virtual_plane_width: float = 0.40
     virtual_plane_height: float = 0.25
 

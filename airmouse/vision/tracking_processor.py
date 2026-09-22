@@ -54,7 +54,9 @@ class TrackingResult:
 class TrackingConfig:
     """Configuration for the tracking processor."""
     # Confidence thresholds
-    min_hand_confidence: float = 0.65
+    min_hand_confidence: float = 0.0  # MediaPipe 1.0 returns borderline scores (~0.5-0.6);
+                                     # setting this to 0 lets the confidence state
+                                     # machine (in tracking_status.py) decide
     min_landmark_visibility: float = 0.5
     min_face_confidence: float = 0.5
 
@@ -90,7 +92,7 @@ class TrackingConfig:
 
     # Head-relative tracking (new 3D system)
     use_head_relative: bool = True  # Enable head-anchored virtual plane
-    virtual_plane_distance: float = 0.30  # meters (30cm)
+    virtual_plane_distance: float = 0.30  # meters (30cm in front, positive Z in head coords = forward)
     virtual_plane_width: float = 0.40     # meters (40cm)
     virtual_plane_height: float = 0.25    # meters (25cm)
     use_head_coords_for_ray: bool = True  # Compute ray in head coordinates
@@ -315,8 +317,11 @@ class LandmarkValidator:
             issues.append("Index tip below PIP (possibly folded or invalid)")
 
         # Check all landmarks are in valid range
+        # Allow slight out-of-bounds (-0.05 to 1.05) since MediaPipe
+        # sometimes returns coordinates just outside [0,1] when a hand
+        # is at the edge of the frame or partially visible.
         for i, lm in enumerate(landmarks):
-            if not (0 <= lm.x <= 1 and 0 <= lm.y <= 1):
+            if not (-0.05 <= lm.x <= 1.05 and -0.05 <= lm.y <= 1.05):
                 issues.append(f"Landmark {i} out of bounds: ({lm.x:.3f}, {lm.y:.3f})")
             if lm.visibility < 0.05:  # More lenient
                 issues.append(f"Landmark {i} very low visibility: {lm.visibility:.3f}")

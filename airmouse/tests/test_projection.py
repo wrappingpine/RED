@@ -250,7 +250,7 @@ class TestHandProjector:
         # Use a valid head coords from mock face
         face = create_mock_face()
         head_coords = HeadCoordinateSystem.from_face(face)
-        plane = VirtualDisplayPlane(head_coords=head_coords)
+        plane = VirtualDisplayPlane(distance=0.30, head_coords=head_coords)
         projector = HandProjector(
             virtual_plane=plane,
             head_coords=head_coords,
@@ -258,11 +258,14 @@ class TestHandProjector:
         )
 
         # Use project_from_landmarks mode
+        # The mock face has eye_midpoint at (0, 0, -0.1) in camera coords
+        # and index_tip at (0, 0, -0.5) in camera coords (fingertip in front of face)
         from airmouse.vision.hand_tracker import Landmark
         from airmouse.vision.face_tracker import FaceLandmark
 
+        # Use actual eye midpoint from the face (which is at z=-0.1)
         index_tip = Landmark(0.0, 0.0, -0.5, 1.0)
-        eye_midpoint = FaceLandmark(0.0, 0.0, 0.0, 1.0)
+        eye_midpoint = FaceLandmark(0.0, 0.0, -0.1, 1.0)
 
         result = projector.project_from_landmarks(index_tip, eye_midpoint, head_coords=head_coords)
 

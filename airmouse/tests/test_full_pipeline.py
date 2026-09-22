@@ -125,7 +125,7 @@ class TestFullPipeline:
 
         # Hand tracker config
         assert hasattr(config, 'hand_tracker')
-        assert config.hand_tracker.max_hands == 1
+        assert config.hand_tracker.max_hands == 2
 
         # Face tracker config (created dynamically in start())
         assert not hasattr(config, 'face_tracker')  # Not in config, created in start()

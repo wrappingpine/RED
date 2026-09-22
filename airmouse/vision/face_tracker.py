@@ -227,9 +227,9 @@ class Face:
 class FaceTrackerSettings:
     """Face tracker configuration."""
     max_faces: int = 1
-    min_detection_confidence: float = 0.5
-    min_tracking_confidence: float = 0.5
-    min_presence_confidence: float = 0.5
+    min_detection_confidence: float = 0.0
+    min_tracking_confidence: float = 0.0
+    min_presence_confidence: float = 0.0
     output_face_blendshapes: bool = False
     output_facial_transformation_matrixes: bool = True
 

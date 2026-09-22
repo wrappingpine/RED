@@ -32,8 +32,12 @@ class TestOneEuroFilter(unittest.TestCase):
             noise = np.random.normal(0, 0.05)
             input_values.append(0.5 + noise)
         
-        # Filter the signal
-        output_values = [filter_.filter(x) for x in input_values]
+        # Filter the signal with explicit timestamps (simulating ~30fps)
+        output_values = []
+        t = 0.0
+        for x in input_values:
+            output_values.append(filter_.filter(x, t))
+            t += 1.0 / 30.0
         
         # Output should be much less noisy
         output_std = np.std(output_values)
@@ -98,8 +102,12 @@ class TestOneEuroFilter(unittest.TestCase):
         # Generate noisy input
         noisy = [0.5 + np.random.normal(0, 0.1) for _ in range(50)]
         
-        # Filter
-        filtered = [filter_.filter(x) for x in noisy]
+        # Filter with explicit timestamps (simulating ~30fps)
+        filtered = []
+        t = 0.0
+        for x in noisy:
+            filtered.append(filter_.filter(x, t))
+            t += 1.0 / 30.0
         
         # Measure: noise reduction ratio
         input_range = max(noisy) - min(noisy)

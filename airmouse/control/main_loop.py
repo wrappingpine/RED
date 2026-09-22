@@ -417,8 +417,8 @@ class AirMouseController:
                 self.face_tracker = FaceTracker(FaceTrackerSettings(
                     max_faces=1,
                     min_detection_confidence=self.config.tracking.min_face_confidence,
-                    min_presence_confidence=0.5,
-                    min_tracking_confidence=0.5,
+                    min_presence_confidence=0.0,
+                    min_tracking_confidence=0.0,
                 ))
                 logger.info("✓ Face tracker initialized for head-relative mode")
                 health_results['face_tracker'] = 'OK'
@@ -952,7 +952,7 @@ class AirMouseController:
                 self.gesture_recognizer.reset()
             if self.tracking_processor:
                 self.tracking_processor.reset()
-            
+
             # Update tracking status - hand lost
             if hands:
                 # Hands detected but confidence too low
@@ -962,8 +962,29 @@ class AirMouseController:
                                                            f"confidence={max_conf:.2f}")
             else:
                 self._tracking_status.record_hand_lost(LostReason.NO_HAND_DETECTED)
-            
+
             frame_data.tracking_state = TrackingState.NO_HAND
+            return
+
+        # LOST_TRACK means hands were detected but projection/validation failed.
+        # Don't reset the tracking processor - hold the last known position and
+        # wait for the next frame to reacquire. Resetting here causes a ping-pong
+        # where the hand is created and destroyed every other frame.
+        if tracking_result.tracking_state == TrackingState.LOST_TRACK:
+            if self.input_manager:
+                self.input_manager.release_all()
+            if self.cursor_controller:
+                self.cursor_controller.reset()
+            if self.gesture_recognizer:
+                self.gesture_recognizer.reset()
+            # Update tracking status - hand lost
+            if hands:
+                max_conf = max((h.confidence for h in hands), default=0.0)
+                self._tracking_status.record_hand_lost(LostReason.CONFIDENCE_DROP,
+                                                       f"confidence={max_conf:.2f}")
+            else:
+                self._tracking_status.record_hand_lost(LostReason.NO_HAND_DETECTED)
+            frame_data.tracking_state = TrackingState.LOST_TRACK
             return
 
         # Get tracked hands for gesture recognition
@@ -977,6 +998,13 @@ class AirMouseController:
         # Notify hand detected (use primary hand)
         if self.on_hand_detected and primary_hand:
             self.on_hand_detected(primary_hand)
+
+        # Update tracking confidence with the primary hand's confidence
+        if primary_hand:
+            self._tracking_status.record_hand_detected(
+                primary_hand.confidence,
+                evidence=f"tracking_state={tracking_result.tracking_state.value}"
+            )
 
         # Handle PRECISION_MODE: switch to precision sensitivity when two hands tracked
         if tracking_result.tracking_state == TrackingState.PRECISION_MODE:
