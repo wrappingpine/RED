@@ -54,22 +54,25 @@ class TestCursorController:
 
         # Same position gives zero movement
         result = self.controller.get_relative_movement_from_plane(0.0, 0.0)
-        assert result is None  # Returns None for zero movement
+        # Frame-to-frame delta of zero is a valid result (0, 0), not None.
+        # None is reserved for "no valid input" (e.g. no hand detected).
+        assert result == (0, 0)
 
     def test_dead_zone_radius(self):
         """Test dead zone radius of 0.02."""
         # Establish reference at center
         self.controller.get_relative_movement_from_plane(0.0, 0.0)
 
-        # Just inside dead zone
-        result = self.controller.get_relative_movement_from_plane(0.015, 0.0)
-        assert result is None
+        # Just inside dead zone - frame-to-frame delta < 0.02
+        result = self.controller.get_relative_movement_from_plane(0.01, 0.0)
+        assert result == (0, 0)  # Dead zone produces zero movement
 
-        result = self.controller.get_relative_movement_from_plane(0.0, 0.015)
-        assert result is None
+        # Stay inside dead zone (delta from previous = 0.01)
+        result = self.controller.get_relative_movement_from_plane(0.0, 0.01)
+        assert result == (0, 0)  # Dead zone produces zero movement
 
-        # Just outside dead zone
-        result = self.controller.get_relative_movement_from_plane(0.025, 0.0)
+        # Move outside dead zone - delta from previous (0, 0.01) = 0.03 > 0.02
+        result = self.controller.get_relative_movement_from_plane(0.03, 0.01)
         assert result is not None  # Should have movement
         dx, dy = result
         assert dx != 0
@@ -150,9 +153,9 @@ class TestCursorController:
         # First movement establishes reference
         controller.get_relative_movement_from_plane(0.5, 0.5)
 
-        # Same position should give zero movement (relative)
+        # Same position should give zero movement (frame-to-frame delta = 0)
         result = controller.get_relative_movement_from_plane(0.5, 0.5)
-        assert result is None
+        assert result == (0, 0)
 
         # Move to new position
         result = controller.get_relative_movement_from_plane(0.6, 0.5)
@@ -232,7 +235,8 @@ class TestCursorController:
         # To test no movement, we need to call with reference point again
         controller.get_relative_movement_from_plane(0.0, 0.0)  # Reset reference
         result = controller.get_relative_movement_from_plane(0.0, 0.0)
-        assert result is None
+        # Frame-to-frame delta is zero → returns (0, 0), not None
+        assert result == (0, 0)
 
     def test_exponential_smoothing(self):
         """Test EMA smoothing option."""

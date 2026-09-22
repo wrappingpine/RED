@@ -130,13 +130,16 @@ class TestGestureRecognizer:
         assert len(gesture_events) == 0
 
     def test_pinch_enter_threshold(self):
-        """Test PINCH_START at enter threshold (0.045)."""
+        """Test pinch enter at threshold (0.045) - pinch becomes active."""
         hand = create_mock_hand(pinch_dist=0.045)  # Exactly at enter threshold
         events = self.recognizer.process([hand])
 
-        pinch_events = [e for e in events if e.gesture_type == GestureType.LEFT_CLICK]
-        assert len(pinch_events) == 1
-        assert pinch_events[0].hand.handedness == "Right"
+        # §5 P0 fix: LEFT_CLICK is emitted on pinch RELEASE, not entry.
+        # On entry, the pinch state becomes active but no click event is generated.
+        click_events = [e for e in events if e.gesture_type == GestureType.LEFT_CLICK]
+        assert len(click_events) == 0  # No click on entry
+        # Verify the pinch state is active
+        assert self.recognizer._state.left_pinch_active
 
     def test_pinch_below_enter_no_trigger(self):
         """Test no pinch trigger below enter threshold."""
@@ -178,16 +181,16 @@ class TestGestureRecognizer:
 
     def test_pinch_hysteresis(self):
         """Test hysteresis prevents flickering at boundaries."""
-        # Enter pinch
+        # Enter pinch - §5: no click on entry
         hand = create_mock_hand(pinch_dist=0.045)
         events = self.recognizer.process([hand])
         pinch_starts = [e for e in events if e.gesture_type == GestureType.LEFT_CLICK]
-        assert len(pinch_starts) == 1
+        assert len(pinch_starts) == 0  # No click on entry
 
         # Move slightly but stay within hysteresis
         hand = create_mock_hand(pinch_dist=0.048)
         events = self.recognizer.process([hand])
-        # Should not trigger new PINCH_START or PINCH_END
+        # Should not trigger new pinch events
         pinch_events = [e for e in events if e.gesture_type in (GestureType.LEFT_CLICK, GestureType.PINCH_END)]
         assert len(pinch_events) == 0
 
