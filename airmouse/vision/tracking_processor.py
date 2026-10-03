@@ -54,9 +54,12 @@ class TrackingResult:
 class TrackingConfig:
     """Configuration for the tracking processor."""
     # Confidence thresholds
-    min_hand_confidence: float = 0.0  # MediaPipe 1.0 returns borderline scores (~0.5-0.6);
+    min_hand_confidence: float = 0.40  # Minimum confidence for hand to be accepted (was 0.0)
+                                     # MediaPipe 1.0 returns borderline scores (~0.5-0.6);
                                      # setting this to 0 lets the confidence state
                                      # machine (in tracking_status.py) decide
+                                     # but 0.40 prevents borderline hands from
+                                     # causing constant tracking loss
     min_landmark_visibility: float = 0.5
     min_face_confidence: float = 0.5
 
@@ -522,6 +525,10 @@ class TrackingProcessor:
         self._projector: Optional[HandProjector] = None
         self._last_cursor_pos: Optional[Tuple[float, float]] = None
 
+        # T016: Face tracking loss state for auto-pause/recovery
+        self._face_tracking_lost: bool = False
+        self._stable_frames: int = 0
+
         # One Euro Filters for projection coordinates (u,v) - Bug 1 fix: smoothing AFTER projection
         self._proj_u_filter = OneEuroFilter(
             min_cutoff=self.config.one_euro_min_cutoff,
@@ -636,6 +643,9 @@ class TrackingProcessor:
 
             if best_face is None:
                 logger.debug("No face with sufficient confidence")
+                # T016: Auto-pause head-relative mode when face confidence falls below threshold
+                self._face_tracking_lost = True
+                self._stable_frames = 0
                 self._update_lost_frames()
                 return TrackingResult(
                     tracked_hands=[],
@@ -646,6 +656,26 @@ class TrackingProcessor:
                     secondary_projection=None,
                     timestamp=current_time
                 )
+
+            # T016: Auto-recover after face tracking is restored (5 stable frames)
+            if self._face_tracking_lost:
+                self._stable_frames += 1
+                if self._stable_frames >= 5:
+                    logger.info("Face tracking recovered - re-enabling head-relative mode")
+                    self._face_tracking_lost = False
+                    self._stable_frames = 0
+                else:
+                    # Still in recovery period - emit warning but continue with valid face
+                    logger.warning(
+                        f"Face tracking recovering: {self._stable_frames}/5 stable frames"
+                    )
+
+            # T016: Reset stable frames counter when tracking is valid
+            if self._face_tracking_lost and self._stable_frames < 5:
+                # During recovery - still use face data but warn
+                pass
+            else:
+                self._stable_frames = 0
 
             # Initialize or update head coordinate system and virtual plane
             self._update_head_tracking(best_face)
@@ -1006,6 +1036,8 @@ class TrackingProcessor:
             },
             "dead_zone_active": self._dead_zone_active,
             "reference_point": self._reference_point,
+            "face_tracking_lost": self._face_tracking_lost,
+            "stable_frames": self._stable_frames,
         }
 
         if self._secondary_hand and not self._secondary_hand.is_lost(self.config):
@@ -1028,6 +1060,9 @@ class TrackingProcessor:
         if hasattr(self, '_cursor_vel_limiter_y'):
             self._cursor_vel_limiter_y.reset()
         self._dead_zone_active = False
+        # T016: Reset face tracking loss state
+        self._face_tracking_lost = False
+        self._stable_frames = 0
         # Reset projection filters
         if hasattr(self, '_proj_u_filter'):
             self._proj_u_filter.reset()

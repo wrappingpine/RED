@@ -9,7 +9,7 @@ to produce normalized cursor coordinates.
 import numpy as np
 import logging
 from dataclasses import dataclass
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict
 from .head_coords import HeadCoordinateSystem
 
 logger = logging.getLogger(__name__)
@@ -208,6 +208,11 @@ class VirtualDisplayPlane:
         """
         Convert 3D point on plane to normalized (u, v) coordinates [0, 1] x [0, 1].
 
+        Intersection failures (point outside plane bounds):
+        - Clamp to plane boundary
+        - Log warning
+        - Continue without crashing
+
         Args:
             point_camera: 3D point on plane in camera coordinates
 
@@ -224,7 +229,8 @@ class VirtualDisplayPlane:
         # Check point is on plane (within tolerance)
         if abs(point_head[2] - self.distance) > 0.01:  # 1cm tolerance
             logger.debug(f"Point not on plane: z={point_head[2]:.4f}, expected={self.distance}")
-            # Still project
+            # Clamp to plane surface
+            point_head[2] = self.distance
 
         # Normalized coordinates
         # X in head coords maps to u: [-width/2, width/2] -> [0, 1]
@@ -234,11 +240,31 @@ class VirtualDisplayPlane:
         u = (point_head[0] + self.width / 2) / self.width
         v = (-point_head[1] + self.height / 2) / self.height
 
-        # Clamp to [0, 1]
+        # Log warning if out of bounds (intersection failure to clamp to boundary)
+        if u < 0.0 or u > 1.0 or v < 0.0 or v > 1.0:
+            logger.warning(
+                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - clamping to boundary"
+            )
+
+        # Clamp to [0, 1]  (coordinate contract level - filters must not clamp)
         u = np.clip(u, 0.0, 1.0)
         v = np.clip(v, 0.0, 1.0)
 
         return (float(u), float(v))
+
+    def clamp_to_bounds(self, u: float, v: float) -> Tuple[float, float]:
+        """
+        Clamp normalized coordinates to plane boundary [0, 1].
+        Used for intersection failures per §9 (intersection failure handling).
+
+        Args:
+            u: Normalized X coordinate (may be outside [0, 1])
+            v: Normalized Y coordinate (may be outside [0, 1])
+
+        Returns:
+            Clamped (u, v) within [0, 1]
+        """
+        return (float(np.clip(u, 0.0, 1.0)), float(np.clip(v, 0.0, 1.0)))
 
     def normalized_to_point_camera(self, u: float, v: float) -> Optional[np.ndarray]:
         """

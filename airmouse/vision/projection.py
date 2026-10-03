@@ -114,14 +114,23 @@ class HandProjector:
                 valid=False,
                 error_message="Invalid face or missing eye midpoint"
             )
+        
+        # Add confidence check
+        if hasattr(face, 'confidence') and face.confidence < 0.5:
+             return ProjectionResult(
+                valid=False,
+                error_message=f"Low face confidence: {face.confidence:.2f}"
+            )
 
         if not self.head_coords.is_valid():
+            self._failed_count += 1
             return ProjectionResult(
                 valid=False,
                 error_message="Invalid head coordinate system"
             )
 
         if not self.virtual_plane.head_coords or not self.virtual_plane.head_coords.is_valid():
+            self._failed_count += 1
             return ProjectionResult(
                 valid=False,
                 error_message="Invalid virtual plane"

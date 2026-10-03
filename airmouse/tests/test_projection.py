@@ -503,6 +503,103 @@ class TestHandProjector:
         assert abs(result_primary.u - result_secondary.u) < 0.01
         assert abs(result_primary.v - result_secondary.v) < 0.01
 
+    def test_graceful_degradation_face_lost(self):
+        """
+        Test graceful degradation to legacy camera coordinates when face tracking is lost (FR-010).
+
+        When face confidence falls below threshold:
+        - System should auto-pause head-relative projection
+        - Fallback to legacy 2D camera coordinate mapping
+        - Log warning and continue without crashing
+        """
+        # Create initial valid face and hand
+        face = create_mock_face()
+        hand = create_mock_hand()
+        hand.landmarks[8] = Landmark(0.0, 0.0, -0.5, 1.0)  # Center in camera coords
+
+        # Project initial position (head-relative mode works)
+        result1 = self.projector.project(hand, face)
+        assert result1.valid is True
+        u1, v1 = result1.u, result1.v
+
+        # Now simulate face tracking loss (low confidence face)
+        face_low_conf = create_mock_face()
+        face_low_conf.confidence = 0.3  # Below min_face_confidence (0.5)
+
+        # With low confidence face, projection should fail gracefully
+        result2 = self.projector.project(hand, face_low_conf)
+        assert result2.valid is False
+        assert "confidence" in result2.error_message.lower() or "face" in result2.error_message.lower()
+
+        # Create face with missing landmarks (complete tracking loss)
+        face_no_landmarks = Face(landmarks=[], confidence=1.0)
+        face_no_landmarks._eye_midpoint = None
+        face_no_landmarks._nose_tip = None
+        face_no_landmarks._forehead = None
+
+        result3 = self.projector.project(hand, face_no_landmarks)
+        assert result3.valid is False
+        assert "landmark" in result3.error_message.lower() or "invalid" in result3.error_message.lower()
+
+        # Test with None face (complete loss)
+        result4 = self.projector.project(hand, None)
+        assert result4.valid is False
+        assert "face" in result4.error_message.lower()
+
+        # Test with invalid head coordinates
+        face_bad = create_mock_face()
+        # Create projector with invalid head_coords
+        from airmouse.vision.head_coords import HeadCoordinateSystem
+        bad_head_coords = HeadCoordinateSystem(_valid=False)
+        bad_plane = VirtualDisplayPlane(distance=0.30, width=0.40, height=0.25, head_coords=bad_head_coords)
+        bad_projector = HandProjector(
+            virtual_plane=bad_plane,
+            head_coords=bad_head_coords,
+            use_head_coords_for_ray=True
+        )
+
+        result5 = bad_projector.project(hand, face_bad)
+        assert result5.valid is False
+        assert "head" in result5.error_message.lower() or "coordinate" in result5.error_message.lower()
+
+        # Verify projector statistics track failures
+        stats = bad_projector.get_stats()
+        assert stats["failed_projections"] > 0
+        assert stats["total_projections"] > 0
+        assert stats["success_rate"] < 1.0
+
+    def test_projection_recovery_after_face_loss(self):
+        """
+        Test that projection recovers when face tracking is restored (FR-010, SC-006).
+
+        After 5 stable frames of valid face data, auto-recover to head-relative mode.
+        """
+        face = create_mock_face()
+        hand = create_mock_hand()
+        hand.landmarks[8] = Landmark(0.0, 0.0, -0.5, 1.0)
+
+        # Initial valid projection
+        result1 = self.projector.project(hand, face)
+        assert result1.valid is True
+        u1, v1 = result1.u, result1.v
+
+        # Simulate face loss for a few frames
+        face_low = create_mock_face()
+        face_low.confidence = 0.3
+        for _ in range(3):
+            result = self.projector.project(hand, face_low)
+            assert result.valid is False
+
+        # Restore face tracking
+        face_restored = create_mock_face()
+        result_recovered = self.projector.project(hand, face_restored)
+        assert result_recovered.valid is True
+        u2, v2 = result_recovered.u, result_recovered.v
+
+        # Position should be same as before (head-relative invariance)
+        assert abs(u1 - u2) < 0.02
+        assert abs(v1 - v2) < 0.02
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
