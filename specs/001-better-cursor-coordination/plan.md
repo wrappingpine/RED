@@ -102,7 +102,8 @@ airmouse/
 │   └── gestures.py                 # Gesture recognition (MAYBE - uses plane coords)
 ├── ui/
 │   ├── hotkeys.py                  # Hotkey registration (MODIFY - Super+Alt+M runtime toggle)
-│   └── main_window.py              # MAYBE - settings for new config params
+│   ├── main_window.py              # MAYBE - settings for new config params
+│   └── safety.py                   # VelocityLimiter + SafetyEvent (EXISTING - extended)
 ├── config/
 │   ├── schema.py                   # Config schema (MODIFY - new params)
 │   └── profiles.py                 # Profile definitions (MODIFY - new defaults)
@@ -112,10 +113,8 @@ airmouse/
 │   ├── test_virtual_plane.py       # MODIFY - projection tests
 │   ├── test_velocity_limiter.py    # NEW - velocity limiter tests
 │   └── test_head_relative.py       # NEW - head-relative mode tests
-├── debug/
-│   └── diagnostics.py              # MODIFY - pipeline stage timing logs
-└── safety/
-    └── safety.py                   # VelocityLimiter + SafetyEvent (EXISTING - extended)
+└── debug/
+    └── diagnostics.py              # MODIFY - pipeline stage timing logs
 ```
 
 **Structure Decision**: Modular monorepo - all changes within existing `airmouse/` package. No new top-level directories.
