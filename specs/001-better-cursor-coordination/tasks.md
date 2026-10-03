@@ -149,7 +149,7 @@
 - [X] T033 Code cleanup, refactoring, and removal of any temporary test debug files from git tracker
 - [X] T034 [P] Add CI latency gate: fail benchmark if P95 end-to-end latency > 50ms at 30 FPS (SC-003, Principle IV)
 - [X] T035 [P] Verify no `print()` statements in production code paths: `grep -r 'print(' airmouse/ --include='*.py' | grep -v test` (Principle XVII)
-- [X] T036 [US2] Handle virtual plane intersection failure edge case in `airmouse/vision/virtual_plane.py` — `clamp_to_bounds()` method (line 255) and `point_to_normalized()` clamping logic (lines 243-251) clamp out-of-bounds points to plane boundary with warning logging. Remaining: structure the warning with tag `projection_intersection_failed` in diagnostics format per FR-010.
+- [X] T036 [US2] Handle virtual plane intersection failure edge case in `airmouse/vision/virtual_plane.py` — `clamp_to_bounds()` method (line 255) and `point_to_normalized()` clamping logic (lines 243-251) clamp out-of-bounds points to plane boundary with structured warning tagged `projection_intersection_failed` per FR-010.
 
 ---
 

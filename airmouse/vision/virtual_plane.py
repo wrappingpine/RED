@@ -240,10 +240,13 @@ class VirtualDisplayPlane:
         u = (point_head[0] + self.width / 2) / self.width
         v = (-point_head[1] + self.height / 2) / self.height
 
-        # Log warning if out of bounds (intersection failure to clamp to boundary)
+        # Log structured warning if out of bounds (intersection failure clamped to boundary)
         if u < 0.0 or u > 1.0 or v < 0.0 or v > 1.0:
             logger.warning(
-                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - clamping to boundary"
+                "event=projection_intersection_failed "
+                f"u={u:.3f} v={v:.3f} "
+                "reason=out_of_bounds "
+                "action=clamp_to_boundary"
             )
 
         # Clamp to [0, 1]  (coordinate contract level - filters must not clamp)

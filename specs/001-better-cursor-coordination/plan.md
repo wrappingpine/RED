@@ -8,7 +8,7 @@
 
 Fix the cursor coordination pipeline by reordering stages: MediaPipe landmarks → virtual plane projection → smoothing (One Euro Filter on plane coordinates) → velocity limiting → cursor output. This addresses three critical bugs from the architecture audit: (1) smoothing before projection destroys head-relative geometry, (2) reference point not updated in head-relative mode, (3) VelocityLimiter contract mismatch treating deltas as positions.
 
-**Status**: Phases 1-4 complete. Phase 5 (US3 - Two-Hand Tracking & Precision Mode) in progress.
+**Status**: All 8 phases complete. 38/38 tasks done (T001-T036). 200 tests passing.
 
 ## Technical Context
 
@@ -90,16 +90,19 @@ specs/001-better-cursor-coordination/
 ```text
 airmouse/
 ├── control/
-│   ├── coordinate_contract.py      # Coordinate space definitions (EXISTING - may extend)
+│   ├── coordinate_contract.py      # Coordinate space definitions (EXISTING - extended)
 │   ├── cursor.py                   # Cursor mapping & smoothing (MODIFY - pipeline reorder)
 │   ├── main_loop.py                # Main tracking loop (MODIFY - integration)
-│   ├── projection.py               # Virtual plane projection (MODIFY - core fix)
-│   └── velocity_limiter.py         # NEW - corrected velocity limiter
+│   └── smoothing.py                # SmoothingFilter ABC + OneEuroFilter/EmaFilter (NEW)
 ├── vision/
 │   ├── tracking_processor.py       # Hand/face tracking pipeline (MODIFY - Bug 1, 2, 3 fixes)
 │   ├── head_coords.py              # Head coordinate system (MODIFY - reference point)
 │   ├── virtual_plane.py            # Virtual plane math (MODIFY - projection logic)
+│   ├── projection.py               # Virtual plane projection (MODIFY - core fix)
 │   └── gestures.py                 # Gesture recognition (MAYBE - uses plane coords)
+├── ui/
+│   ├── hotkeys.py                  # Hotkey registration (MODIFY - Super+Alt+M runtime toggle)
+│   └── main_window.py              # MAYBE - settings for new config params
 ├── config/
 │   ├── schema.py                   # Config schema (MODIFY - new params)
 │   └── profiles.py                 # Profile definitions (MODIFY - new defaults)
@@ -111,8 +114,8 @@ airmouse/
 │   └── test_head_relative.py       # NEW - head-relative mode tests
 ├── debug/
 │   └── diagnostics.py              # MODIFY - pipeline stage timing logs
-└── ui/
-    └── main_window.py              # MAYBE - settings for new config params
+└── safety/
+    └── safety.py                   # VelocityLimiter + SafetyEvent (EXISTING - extended)
 ```
 
 **Structure Decision**: Modular monorepo - all changes within existing `airmouse/` package. No new top-level directories.

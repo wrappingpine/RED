@@ -105,12 +105,11 @@ The VelocityLimiter receives deltas (dx, dy) but incorrectly treats them as posi
 
 ### Edge Cases
 
-- What happens when face tracking is lost but hand tracking continues? → Fall back to legacy camera-coordinate mapping with warning (structured WARNING event with tag `face_tracking_lost`, tray notification via SafetyEvent). Auto-recover when face confidence exceeds threshold for 5 consecutive frames.
-- What happens when virtual plane intersection fails (ray parallel to plane)? → Clamp to nearest plane boundary, log structured WARNING event with tag `projection_intersection_failed`, and continue with the clamped position without interrupting cursor tracking.
-- How does system handle sudden camera resolution change? → Recompute normalization, reset filters
+- How does system handle sudden camera resolution change? → Recompute landmark normalization (scale landmarks by new width/height), reset all filter state (One Euro Filter, EMA, VelocityLimiter), and re-derive virtual plane projection with updated head coordinate system. Filters reset to initial state to avoid stale position deltas.
 - What if head landmarks are low confidence? → Disable head-relative mode automatically, notify user
 - How does system behave on multi-monitor setups? → Virtual plane maps to primary monitor; cursor clamping at screen edges
-- What happens when both face and hand tracking are lost simultaneously? → Cursor freezes at last valid position, stabilization frames reset, log WARNING once per session, await automatic recovery on re-acquisition.
+
+*(Face tracking degradation, virtual plane intersection failure, and simultaneous face+hand tracking loss are fully specified in FR-010 and the Clarifications section above.)*
 
 ## Requirements *(mandatory)*
 
@@ -141,10 +140,10 @@ The VelocityLimiter receives deltas (dx, dy) but incorrectly treats them as posi
 
 - **SC-001**: Cursor direction matches hand direction in all 4 cardinal directions (100% accuracy in synthetic test)
 - **SC-002**: Head-movement invariance: cursor drift <2 pixels (RMS, per-axis) when head moves ±30° yaw, ±20° pitch with hand fixed relative to head
-- **SC-003**: End-to-end latency <50ms at 30 FPS, measured from camera frame capture timestamp to uinput write completion timestamp (full pipeline: frame acquisition → landmark inference → projection → smoothing → velocity limiting → cursor injection)
+- **SC-003**: End-to-end latency <50ms at 30 FPS, <35ms at 60 FPS, measured from camera frame capture timestamp to uinput write completion timestamp (full pipeline: frame acquisition → landmark inference → projection → smoothing → velocity limiting → cursor injection)
 - **SC-004**: Jitter reduction: cursor position std dev <1 pixel with stationary hand (synthetic Gaussian noise σ=0.01 normalized coordinates, 1000 frames)
 - **SC-005**: Velocity limiting: max cursor speed respects configured max_velocity ±5%
-- **SC-006**: No regression in legacy mode: existing camera-coordinate mapping works identically
+- **SC-006**: No regression in legacy mode: existing camera-coordinate mapping works identically (100% test pass rate on legacy mode tests)
 - **SC-007**: All existing tests pass (test_projection.py, test_cursor_smoothing.py, test_virtual_plane.py)
 
 ## Assumptions
