@@ -19,6 +19,8 @@
 - **Q:** Should the One Euro Filter and EMA smoothing be implemented as interchangeable classes behind a common interface, or as two separate code paths selected at startup? (FR-002) → **A:** A common `SmoothingFilter` abstract base class with `OneEuroFilter` and `EmaFilter` concrete implementations, selected at startup via config and swappable at runtime for testing.
 - **Q:** What angular ranges should SC-002 head-movement invariance tests cover for yaw and pitch? (SC-002) → **B:** ±30° yaw, ±20° pitch (more restrictive pitch limit reflects real-world face tracking degradation; matches quickstart.md validation Scenario 2).
 - **Q:** What noise model and measurement method should SC-004 jitter reduction tests use? (SC-004) → **A:** Stationary hand (zero velocity) + Gaussian noise σ=0.01 normalized coordinates, 1000 frames, measure cursor position std dev <1px (matches quickstart.md Scenario 4).
+- **Q:** What is the exact two-hand precision gesture definition? → **C:** Any two hands detected (with `enable_two_hand=True` and `secondary_hand_precision_mode=True`) triggers precision mode immediately — no specific hand shape or hold duration required. Already implemented in `gestures.py` (line 376-378).
+- **Q:** How should the system handle both face and hand tracking lost simultaneously? → **C:** Cursor freezes at last valid position, stabilization frames reset, log WARNING once per session, await automatic recovery on re-acquisition.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -107,6 +109,7 @@ The VelocityLimiter receives deltas (dx, dy) but incorrectly treats them as posi
 - How does system handle sudden camera resolution change? → Recompute normalization, reset filters
 - What if head landmarks are low confidence? → Disable head-relative mode automatically, notify user
 - How does system behave on multi-monitor setups? → Virtual plane maps to primary monitor; cursor clamping at screen edges
+- What happens when both face and hand tracking are lost simultaneously? → Cursor freezes at last valid position, stabilization frames reset, log WARNING once per session, await automatic recovery on re-acquisition.
 
 ## Requirements *(mandatory)*
 
