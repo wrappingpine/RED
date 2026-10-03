@@ -18,6 +18,7 @@
 - **Q:** When the virtual plane intersection fails (ray parallel to plane), what should the system do beyond clamping and logging? → **A:** Clamp to nearest plane boundary, log structured WARNING event with tag `projection_intersection_failed`, and continue with the clamped position without interrupting cursor tracking.
 - **Q:** Should the One Euro Filter and EMA smoothing be implemented as interchangeable classes behind a common interface, or as two separate code paths selected at startup? (FR-002) → **A:** A common `SmoothingFilter` abstract base class with `OneEuroFilter` and `EmaFilter` concrete implementations, selected at startup via config and swappable at runtime for testing.
 - **Q:** What angular ranges should SC-002 head-movement invariance tests cover for yaw and pitch? (SC-002) → **B:** ±30° yaw, ±20° pitch (more restrictive pitch limit reflects real-world face tracking degradation; matches quickstart.md validation Scenario 2).
+- **Q:** What noise model and measurement method should SC-004 jitter reduction tests use? (SC-004) → **A:** Stationary hand (zero velocity) + Gaussian noise σ=0.01 normalized coordinates, 1000 frames, measure cursor position std dev <1px (matches quickstart.md Scenario 4).
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -137,7 +138,7 @@ The VelocityLimiter receives deltas (dx, dy) but incorrectly treats them as posi
 - **SC-001**: Cursor direction matches hand direction in all 4 cardinal directions (100% accuracy in synthetic test)
 - **SC-002**: Head-movement invariance: cursor drift <2 pixels (RMS, per-axis) when head moves ±30° yaw, ±20° pitch with hand fixed relative to head
 - **SC-003**: End-to-end latency <50ms at 30 FPS, measured from camera frame capture timestamp to uinput write completion timestamp (full pipeline: frame acquisition → landmark inference → projection → smoothing → velocity limiting → cursor injection)
-- **SC-004**: Jitter reduction: cursor position std dev <1 pixel with stationary hand (synthetic noise test)
+- **SC-004**: Jitter reduction: cursor position std dev <1 pixel with stationary hand (synthetic Gaussian noise σ=0.01 normalized coordinates, 1000 frames)
 - **SC-005**: Velocity limiting: max cursor speed respects configured max_velocity ±5%
 - **SC-006**: No regression in legacy mode: existing camera-coordinate mapping works identically
 - **SC-007**: All existing tests pass (test_projection.py, test_cursor_smoothing.py, test_virtual_plane.py)
