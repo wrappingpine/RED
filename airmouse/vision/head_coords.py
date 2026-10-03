@@ -379,6 +379,29 @@ class HeadCoordinateSystem:
 
         return points_head[:, :3]
 
+    def head_to_camera_batch(self, points: np.ndarray) -> np.ndarray:
+        """
+        Transform multiple 3D points from head to camera coordinates.
+
+        Args:
+            points: Nx3 array of points in head coordinates
+
+        Returns:
+            Nx3 array of points in camera coordinates
+        """
+        if not self._valid:
+            return points.copy()
+
+        if points.shape[1] != 3:
+            raise ValueError("Points must be Nx3")
+
+        T_inv = self.get_inverse_transform_matrix()
+        n = points.shape[0]
+        points_homo = np.hstack([points.astype(np.float32), np.ones((n, 1), dtype=np.float32)])
+        points_cam = (T_inv @ points_homo.T).T
+
+        return points_cam[:, :3]
+
     def get_forward_vector(self) -> np.ndarray:
         """Get forward vector (Z axis) in camera coordinates."""
         return self.forward.copy()

@@ -159,9 +159,17 @@ class HandProjector:
 
             if self.use_head_coords_for_ray:
                 # Transform to head coordinates for more accurate intersection
-                return self._project_in_head_coords(
+                result = self._project_in_head_coords(
                     eye_midpoint_cam, fingertip_cam, ray_direction_cam
                 )
+                # Graceful fallback: if the ray missed the plane (parallel or
+                # pointing away — common when hand is at eye depth or between
+                # eye and plane), fall back to projecting the fingertip's
+                # head-space x/y onto the plane surface.  This prevents the
+                # tracking loop from hard-freezing on every such frame.
+                if not result.valid and result.error_message.startswith("Ray-plane intersection failed"):
+                    return self._fallback_projection(eye_midpoint_cam, fingertip_cam)
+                return result
             else:
                 # Project directly in camera coordinates
                 return self._project_in_camera_coords(
@@ -241,6 +249,48 @@ class HandProjector:
 
         self._last_result = result
         return result
+
+    def _fallback_projection(
+        self,
+        eye_midpoint_cam: np.ndarray,
+        fingertip_cam: np.ndarray
+    ) -> ProjectionResult:
+        """
+        Fallback when the ray misses the plane (parallel or pointing away).
+
+        Projects the fingertip's head-space X/Y onto the plane surface at
+        z=distance.  This keeps the cursor responsive when the hand is at
+        eye depth or between the eye and the virtual plane, instead of
+        freezing.
+        """
+        fingertip_head = self.head_coords.camera_to_head(fingertip_cam)
+        # Clamp the head-space point onto the plane surface at z=distance
+        point_head = np.array([
+            fingertip_head[0],
+            fingertip_head[1],
+            self.virtual_plane.distance,
+        ], dtype=np.float32)
+        point_cam = self.head_coords.head_to_camera(point_head)
+
+        normalized = self.virtual_plane.point_to_normalized(point_cam)
+        if normalized is None:
+            return ProjectionResult(
+                valid=False,
+                error_message="Fallback projection failed"
+            )
+        u, v = normalized
+        logger.debug(
+            f"Fallback projection (ray missed plane): u={u:.3f} v={v:.3f}"
+        )
+        return ProjectionResult(
+            u=u,
+            v=v,
+            intersection_camera=point_cam,
+            intersection_head=point_head,
+            ray_origin_camera=eye_midpoint_cam,
+            ray_direction_camera=fingertip_cam - eye_midpoint_cam,
+            valid=True,
+        )
 
     def _project_in_camera_coords(
         self,
@@ -327,7 +377,26 @@ class HandProjector:
             intersection_head = self.virtual_plane.ray_plane_intersection_head(eye_head, ray_dir_head)
 
             if intersection_head is None:
-                return ProjectionResult(valid=False, error_message="No intersection in head coords")
+                # Graceful fallback: ray missed the plane, project fingertip
+                # x/y onto the plane surface at z=distance
+                point_head = np.array([
+                    fingertip_head[0],
+                    fingertip_head[1],
+                    self.virtual_plane.distance,
+                ], dtype=np.float32)
+                normalized = self.virtual_plane.point_to_normalized(hc.head_to_camera(point_head))
+                if normalized is None:
+                    return ProjectionResult(valid=False, error_message="Normalized conversion failed")
+                u, v = normalized
+                logger.debug("Fallback projection (ray missed plane) in project_from_landmarks")
+                return ProjectionResult(
+                    u=u, v=v,
+                    intersection_camera=hc.head_to_camera(point_head),
+                    intersection_head=point_head,
+                    ray_origin_camera=eye_cam,
+                    ray_direction_camera=ray_direction,
+                    valid=True
+                )
 
             normalized = self.virtual_plane.point_to_normalized(hc.head_to_camera(intersection_head))
             if normalized is None:

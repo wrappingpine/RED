@@ -202,17 +202,13 @@ class VirtualDisplayPlane:
         # ray_origin[2] + t * ray_direction[2] = distance
         # t = (distance - ray_origin[2]) / ray_direction[2]
         #
-        # NOTE: MediaPipe's camera coordinate system uses NEGATIVE Z for
-        # "forward" (points into the scene), so a fingertip in front of the
-        # face has a MORE NEGATIVE z than the eye.  When transformed to head
-        # coordinates the fingertip therefore has a SMALLER (more negative)
-        # z than the eye, and the ray direction's z component is negative.
-        # The plane sits at z=+distance (positive), so a ray that starts at
-        # the eye (z≈0) and points toward the fingertip (z<0) will never
-        # reach the plane in the +Z direction.  We must therefore accept
-        # rays whose z component is negative as long as they are not
-        # degenerate (|z| > 1e-6).
-
+        # NOTE: MediaPipe camera coordinate system uses NEGATIVE Z for
+        # "forward" (points into the scene).  The HeadCoordinateSystem
+        # rotates camera coords so that +Z (head-forward) points toward
+        # the nose.  A fingertip in front of the face therefore maps to
+        # a POSITIVE z in head coordinates.  The plane at z=+distance
+        # is reached by rays whose z component is positive and whose
+        # origin z < distance.
         if abs(ray_direction_head[2]) <= 1e-6:  # Ray parallel to plane
             return None
 
@@ -368,7 +364,7 @@ class VirtualDisplayPlane:
             [-self.width/2, self.height/2, self.distance],
         ], dtype=np.float32)
 
-        return self.head_coords.camera_to_head_batch(corners_head)
+        return self.head_coords.head_to_camera_batch(corners_head)
 
     def draw_debug(self, frame, camera_matrix=None, dist_coeffs=None,
                   ray_origin=None, ray_direction=None, intersection=None,

@@ -978,46 +978,73 @@ class AirMouseController:
             # No valid tracked hand - release all buttons and freeze
             if self.input_manager:
                 self.input_manager.release_all()
-            if self.cursor_controller:
-                self.cursor_controller.reset()
-            if self.gesture_recognizer:
-                self.gesture_recognizer.reset()
-            if self.tracking_processor:
-                self.tracking_processor.reset()
 
-            # Update tracking status - hand lost
-            if hands:
-                # Hands detected but confidence too low
-                max_conf = max((h.confidence for h in hands), default=0.0)
-                # Only trigger loss if confidence is truly lost (< 0.15)
-                # Borderline hands (0.15-0.40) should not cause constant tracking loss
-                if max_conf < 0.15:
-                    self._tracking_status.record_hand_lost(LostReason.CONFIDENCE_DROP,
-                                                           f"confidence={max_conf:.2f}")
-                # else: hands exist but confidence is low - don't trigger loss
-                # The tracking processor already filtered them out
-            else:
+            # Distinguish "no hands at all" from "hands detected but
+            # confidence too low to track".  Resetting the tracking
+            # processor (One Euro Filter state, gesture state) on every
+            # borderline frame causes a ping-pong where the hand is
+            # created and destroyed every other frame.  Only reset when
+            # there are genuinely no hands, or when confidence has been
+            # below the drop threshold for several consecutive frames.
+            if not hands:
+                if self.cursor_controller:
+                    self.cursor_controller.reset()
+                if self.gesture_recognizer:
+                    self.gesture_recognizer.reset()
+                if self.tracking_processor:
+                    self.tracking_processor.reset()
                 self._tracking_status.record_hand_lost(LostReason.NO_HAND_DETECTED)
+            else:
+                # Hands exist but confidence is too low to track.
+                # Hold the last valid cursor position; do NOT reset
+                # filters or gesture state — they will re-acquire
+                # automatically when confidence recovers.
+                max_conf = max((h.confidence for h in hands), default=0.0)
+                if max_conf < 0.15:
+                    # Truly lost: reset after enough consecutive bad frames
+                    self._consecutive_lost = getattr(self, '_consecutive_lost', 0) + 1
+                    if self._consecutive_lost >= 3:
+                        if self.cursor_controller:
+                            self.cursor_controller.reset()
+                        if self.gesture_recognizer:
+                            self.gesture_recognizer.reset()
+                        if self.tracking_processor:
+                            self.tracking_processor.reset()
+                        self._consecutive_lost = 0
+                        self._tracking_status.record_hand_lost(
+                            LostReason.CONFIDENCE_DROP,
+                            f"confidence={max_conf:.2f} (sustained)")
+                    else:
+                        self._tracking_status.record_hand_lost(
+                            LostReason.CONFIDENCE_DROP,
+                            f"confidence={max_conf:.2f} (holding, frame {self._consecutive_lost})")
+                else:
+                    # Borderline (0.15-0.40): hold position, don't trigger loss
+                    self._consecutive_lost = 0
 
             frame_data.tracking_state = TrackingState.NO_HAND
             return
 
         # LOST_TRACK means hands were detected but projection/validation failed.
-        # Don't reset the tracking processor - hold the last known position and
-        # wait for the next frame to reacquire. Resetting here causes a ping-pong
-        # where the hand is created and destroyed every other frame.
+        # With the fallback projection in HandProjector, LOST_TRACK should now be
+        # rare (only true invalid geometry). When it occurs, HOLD the last valid
+        # cursor position rather than fully resetting everything, to avoid a
+        # ping-pong where the hand is created and destroyed every other frame.
         if tracking_result.tracking_state == TrackingState.LOST_TRACK:
+            # Release buttons for safety but keep cursor state so we don't jump
             if self.input_manager:
                 self.input_manager.release_all()
-            if self.cursor_controller:
-                self.cursor_controller.reset()
             if self.gesture_recognizer:
                 self.gesture_recognizer.reset()
             # Update tracking status - hand lost
             if hands:
                 max_conf = max((h.confidence for h in hands), default=0.0)
-                self._tracking_status.record_hand_lost(LostReason.CONFIDENCE_DROP,
-                                                       f"confidence={max_conf:.2f}")
+                if max_conf < 0.15:
+                    self._tracking_status.record_hand_lost(LostReason.CONFIDENCE_DROP,
+                                                           f"confidence={max_conf:.2f}")
+                else:
+                    self._tracking_status.record_hand_lost(LostReason.LOW_CONFIDENCE,
+                                                           f"projection_failed confidence={max_conf:.2f}")
             else:
                 self._tracking_status.record_hand_lost(LostReason.NO_HAND_DETECTED)
             frame_data.tracking_state = TrackingState.LOST_TRACK

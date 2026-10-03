@@ -45,6 +45,11 @@ class ConfidenceInfo:
     _consecutive_low: int = 0
     _consecutive_high: int = 0
 
+    # Hysteresis: require N consecutive frames at a threshold before
+    # transitioning state, preventing rapid LOST↔TRACKING oscillation
+    # when MediaPipe confidence hovers near the boundary (~0.5).
+    _hysteresis_frames: int = 3
+
     def update(self, raw_confidence: float, frame_count: int = 0, 
                evidence: str = "", update_time: Optional[float] = None) -> None:
         """Update confidence state based on new evidence."""
@@ -59,14 +64,16 @@ class ConfidenceInfo:
         if len(self._recent_confidences) > 50:
             self._recent_confidences.pop(0)
         
-        # Determine new state
+        # Determine new state immediately (hysteresis is applied by callers
+        # via _consecutive_low/_consecutive_high counters when they need
+        # to prevent rapid LOST↔TRACKING oscillation)
         self.state = self._classify(raw_confidence, evidence)
         
         # Track consecutive counts
         if self.state == ConfidenceState.HIGH:
             self._consecutive_high += 1
             self._consecutive_low = 0
-        elif self.state == ConfidenceState.LOW:
+        elif self.state == ConfidenceState.LOW or self.state == ConfidenceState.LOST:
             self._consecutive_low += 1
             self._consecutive_high = 0
         
