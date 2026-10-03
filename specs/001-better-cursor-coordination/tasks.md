@@ -161,16 +161,16 @@
 - **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
 - **User Stories (Phase 3-7)**: All depend on Foundational phase completion
   - Phase 3 (US1) -> Phase 4 (US2) -> Phase 5 (US3) -> Phase 6 (US4) -> Phase 7 (US5)
-  - Phases 1-7 COMPLETE. All implementation and test tasks done (T001-T036).
+  - Phases 1-8 COMPLETE. All implementation and test tasks done (T001-T036).
 - **Polish (Final Phase)**: Depends on all user stories being complete
 
 ### User Story Dependencies
 
 - **User Story 1 (P1)**: Natural direction mapping. Pre-requisite for all other stories. COMPLETE.
 - **User Story 2 (P1)**: Virtual plane projection. Depends on US1 coordinates. COMPLETE (T014-T016).
-- **User Story 3 (P1)**: Plane coordinate smoothing. Depends on US2 projection. MOSTLY COMPLETE (T019-T021 done; T017-T018 tests remaining).
-- **User Story 4 (P2)**: Reference point fix. Depends on US2 and US3. IMPLEMENTATION COMPLETE (T024-T025); tests T022-T023 remaining.
-- **User Story 5 (P2)**: Velocity limiter fix. Can run in parallel with US4 once US1-3 are complete. IMPLEMENTATION COMPLETE (T028-T029); tests T026-T027 remaining.
+- **User Story 3 (P1)**: Plane coordinate smoothing. Depends on US2 projection. COMPLETE (T017-T021).
+- **User Story 4 (P2)**: Reference point fix. Depends on US2 and US3. COMPLETE (T022-T025).
+- **User Story 5 (P2)**: Velocity limiter fix. Can run in parallel with US4 once US1-3 are complete. COMPLETE (T026-T029).
 
 ### Parallel Opportunities
 

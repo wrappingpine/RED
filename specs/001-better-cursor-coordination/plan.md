@@ -82,7 +82,7 @@ specs/001-better-cursor-coordination/
 ├── data-model.md        # Phase 1 output
 ├── quickstart.md        # Phase 1 output
 ├── contracts/           # Phase 1 output
-└── tasks.md             # Phase 2 output (later)
+└── tasks.md             # Phase 8 output (final task list)
 ```
 
 ### Source Code (repository root)
