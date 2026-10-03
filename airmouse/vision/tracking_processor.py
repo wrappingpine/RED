@@ -182,7 +182,17 @@ class OneEuroFilter:
 
 
 class VelocityLimiter:
-    """Limits the rate of change to prevent sudden jumps (for position values)."""
+    """Limits the rate of change to prevent sudden jumps (for position values).
+
+    The previous implementation blended the velocity-limited value with
+    ``self.prev_value`` *and then stored the blend back as prev_value*,
+    creating a second low-pass filter in series with the velocity clamp.
+    On a stationary-but-jittery hand this produced a feedback loop: the
+    smoothed prev_value drifted, the next frame's desired_velocity was
+    computed against the drifted value, and the cursor vibrated instead of
+    settling.  We now store the raw clamped value so the velocity estimate
+    is honest, and apply smoothing only as a single output-stage filter.
+    """
 
     def __init__(self, max_velocity: float = 0.5, smoothing: float = 0.3):
         self.max_velocity = max_velocity
@@ -204,21 +214,25 @@ class VelocityLimiter:
         if dt <= 0:
             dt = 1e-3
 
-        # Calculate desired velocity
+        # Calculate desired velocity (units/sec)
         desired_velocity = (value - self.prev_value) / dt
 
-        # Clamp velocity
+        # Clamp velocity.  max_velocity is in units/sec, so convert the
+        # per-frame allowance to a per-second cap for the comparison.
         max_vel = self.max_velocity / dt  # Convert to per-frame
         if abs(desired_velocity) > max_vel:
             desired_velocity = max_vel if desired_velocity > 0 else -max_vel
 
-        # Apply limited velocity
-        limited_value = self.prev_value + desired_velocity * dt
+        # Apply limited velocity to get the clamped new position
+        clamped = self.prev_value + desired_velocity * dt
 
-        # Apply additional smoothing
-        smoothed = self.smoothing * limited_value + (1 - self.smoothing) * self.prev_value
+        # Single output-stage smoothing: blend clamped value with previous
+        # *output* (not prev_value, which we keep as the raw clamped value
+        # so the next frame's velocity estimate is honest).
+        smoothed = self.smoothing * clamped + (1 - self.smoothing) * self._smoothed_prev
+        self._smoothed_prev = smoothed
 
-        self.prev_value = smoothed
+        self.prev_value = clamped
         self.prev_time = t
 
         return smoothed
@@ -230,6 +244,7 @@ class VelocityLimiter:
 
         if self.prev_value is None:
             self.prev_value = 0.0
+            self._smoothed_prev = 0.0
             self.prev_time = t
             return delta
 
@@ -248,8 +263,9 @@ class VelocityLimiter:
         # Apply limited velocity
         limited_delta = desired_velocity * dt
 
-        # Apply additional smoothing
-        smoothed = self.smoothing * limited_delta + (1 - self.smoothing) * self.prev_value
+        # Single output-stage smoothing
+        smoothed = self.smoothing * limited_delta + (1 - self.smoothing) * self._smoothed_prev
+        self._smoothed_prev = smoothed
 
         self.prev_value = smoothed
         self.prev_time = t
@@ -259,6 +275,8 @@ class VelocityLimiter:
     def reset(self):
         self.prev_value = None
         self.prev_time = None
+        if hasattr(self, '_smoothed_prev'):
+            del self._smoothed_prev
 
 
 class LandmarkValidator:

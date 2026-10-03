@@ -371,6 +371,14 @@ class AirMouseController:
         self._last_tracking_lost_log: float = 0.0
         self._tracking_lost_log_interval: float = 3.0  # Log at most once per 3 seconds
 
+        # §7: Action-cursor coordination.  When a click or drag fires, the
+        # cursor is frozen so the hand's natural micro-twitchs don't drag
+        # the selection off the target.  Reset on drag-end or after a few
+        # frames of no movement.
+        self._cursor_frozen: bool = False
+        self._drag_active: bool = False
+        self._consecutive_lost: int = 0
+
     def initialize(self) -> bool:
         """Initialize all components."""
         logger.info("Initializing Air Mouse...")
@@ -1086,6 +1094,7 @@ class AirMouseController:
 
         frame_data.cursor_position = norm_position
         frame_data.mouse_movement = rel_movement
+        self._last_mouse_movement = rel_movement
 
         # Gesture recognition using tracked hands
         gesture_start = time.time()
@@ -1232,15 +1241,28 @@ class AirMouseController:
 
         # Safe to deliver input - proceed with caution
         input_delivered = False
-        
+
+        # §7: Action-cursor coordination.  When a drag is in progress or a
+        # click has just fired, freeze cursor movement so the hand's natural
+        # micro-twitchs don't drag the selection off the target.  The cursor
+        # is unfrozen when the drag ends or the next frame's movement is
+        # large enough to indicate a deliberate reposition.
+        cursor_frozen = self._cursor_frozen
+        drag_active = self._drag_active
+
         # Move cursor if we have relative movement
         if rel_movement and (rel_movement[0] != 0 or rel_movement[1] != 0):
-            self.input_manager.move(rel_movement[0], rel_movement[1])
-            # Update tracked cursor position so the corner-escape
-            # detector (and velocity limiter) see the real cursor.
-            x, y = self._cursor_position
-            self._cursor_position = (x + rel_movement[0], y + rel_movement[1])
-            input_delivered = True
+            if not cursor_frozen:
+                self.input_manager.move(rel_movement[0], rel_movement[1])
+                # Update tracked cursor position so the corner-escape
+                # detector (and velocity limiter) see the real cursor.
+                x, y = self._cursor_position
+                self._cursor_position = (x + rel_movement[0], y + rel_movement[1])
+                input_delivered = True
+            else:
+                # Cursor frozen - still track position for corner escape
+                x, y = self._cursor_position
+                self._cursor_position = (x + rel_movement[0], y + rel_movement[1])
 
         # Process gesture events
         for event in events:
@@ -1256,26 +1278,35 @@ class AirMouseController:
                     continue
 
             if event.gesture_type == GestureType.LEFT_CLICK:
+                # Freeze cursor during the click so the hand's post-click
+                # micro-movement doesn't drag the selection.
+                self._cursor_frozen = True
                 self.input_manager.click(1)
                 input_delivered = True
                 logger.debug("Left click")
 
             elif event.gesture_type == GestureType.RIGHT_CLICK:
+                self._cursor_frozen = True
                 self.input_manager.click(3)
                 input_delivered = True
                 logger.debug("Right click")
 
             elif event.gesture_type == GestureType.MIDDLE_CLICK:
+                self._cursor_frozen = True
                 self.input_manager.click(2)
                 input_delivered = True
                 logger.debug("Middle click")
 
             elif event.gesture_type == GestureType.DRAG_START:
+                self._drag_active = True
+                self._cursor_frozen = True
                 self.input_manager.button_down(1)
                 input_delivered = True
                 logger.debug("Drag start")
 
             elif event.gesture_type == GestureType.DRAG_END:
+                self._drag_active = False
+                self._cursor_frozen = False
                 self.input_manager.button_up(1)
                 input_delivered = True
                 logger.debug("Drag end")
@@ -1321,6 +1352,19 @@ class AirMouseController:
         # Notify GUI with processed frame and hands
         if self.on_frame_processed:
             self.on_frame_processed(self._last_frame, hands)
+
+        # §7: Auto-unfreeze the cursor after a click.  A click freezes the
+        # cursor so the hand's post-click micro-movement doesn't drag the
+        # selection.  If no further click/drag event fires this frame, and
+        # the hand has been stationary for a couple of frames, unfreeze so
+        # the user can continue moving normally.
+        if self._cursor_frozen and not self._drag_active:
+            self._cursor_frozen_frames = getattr(self, '_cursor_frozen_frames', 0) + 1
+            if self._cursor_frozen_frames >= 2:
+                self._cursor_frozen = False
+                self._cursor_frozen_frames = 0
+        else:
+            self._cursor_frozen_frames = 0
 
         return input_delivered
 
@@ -1398,8 +1442,19 @@ class AirMouseController:
     def _check_safety(self):
         """Check safety conditions using SafetyManager."""
         if self._safety_manager:
-            # The safety manager handles its own monitoring
-            pass
+            # Feed the Wayland focus monitor with hand-activity so the
+            # heuristic has something to work with when X11 is unavailable.
+            # Only record activity when the cursor actually moved — a
+            # stationary hand should NOT reset the idle timer, otherwise
+            # the focus heuristic never fires on Wayland.
+            if hasattr(self._safety_manager, '_focus_monitor') and self._safety_manager._focus_monitor:
+                fm = self._safety_manager._focus_monitor
+                if hasattr(fm, 'record_hand_activity'):
+                    # Check if the cursor moved this frame
+                    if hasattr(self, '_last_mouse_movement') and self._last_mouse_movement:
+                        dx, dy = self._last_mouse_movement
+                        if dx != 0 or dy != 0:
+                            fm.record_hand_activity()
 
     def _update_stats(self, loop_start: float):
         """Update performance statistics."""

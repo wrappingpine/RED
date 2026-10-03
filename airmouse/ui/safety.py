@@ -327,9 +327,19 @@ class FocusMonitor:
                 time.sleep(1.0)
 
     def _check_focus(self) -> bool:
-        """Check if Air Mouse window has focus."""
+        """Check if Air Mouse window has focus.
+
+        On X11 we use _NET_ACTIVE_WINDOW / get_input_focus.  On Wayland
+        (or when X11 is unavailable) there is no equivalent protocol, so we
+        fall back to an activity-based heuristic: if the hand has been
+        moving recently we assume the user is engaged; if the hand has been
+        still for ``focus_idle_seconds`` we treat it as a focus loss so the
+        auto-pause can kick in.  This is intentionally conservative — false
+        pauses are worse than false negatives because they interrupt the
+        user mid-task.
+        """
         if not self._x11_display:
-            return True  # Can't check - assume we have focus
+            return self._wayland_focus_check()
 
         try:
             # Get active window
@@ -368,6 +378,29 @@ class FocusMonitor:
         except Exception as e:
             logger.debug(f"Focus check error: {e}")
             return True  # On error, assume focus
+
+    def _wayland_focus_check(self) -> bool:
+        """Wayland-compatible focus check using hand-activity heuristic.
+
+        On Wayland there is no global active-window query.  We approximate
+        focus by tracking user activity: if the hand has moved within the
+        last ``focus_idle_seconds`` seconds we assume the user is engaged.
+        If the hand has been still for longer, we report focus loss so the
+        auto-pause can engage (which is the correct behaviour for an
+        unattended app).
+        """
+        now = time.time()
+        last_activity = getattr(self, '_last_hand_activity', 0.0)
+        idle = now - last_activity
+        # If idle for more than 2x the focus check interval, consider it
+        # a potential focus loss.  This is a heuristic, not a certainty.
+        if idle > self._config.focus_check_interval * 2:
+            return False
+        return True
+
+    def record_hand_activity(self):
+        """Record that the hand moved (used by the Wayland focus heuristic)."""
+        self._last_hand_activity = time.time()
 
 
 class InactivityTimer:
