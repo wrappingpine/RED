@@ -1,0 +1,5 @@
+2026-09-22 22:50:23,297 - airmouse.utils.error_logging - INFO - [INFO] main: Exception: Application started successfully
+2026-09-22 22:50:23,298 - airmouse.utils.error_logging - WARNING - [WARNING] system: Exception: Low memory detected Context: {"memory_available_mb": 128}
+2026-09-22 22:51:04,240 - airmouse.utils.error_logging - INFO - [INFO] main: Exception: Application started successfully
+2026-09-22 22:51:04,241 - airmouse.utils.error_logging - WARNING - [WARNING] system: Exception: Low memory detected Context: {"memory_available_mb": 128}
+2026-09-22 22:51:04,241 - airmouse.utils.error_logging - ERROR - [ERROR] tracker: ValueError: Invalid hand tracking parameters

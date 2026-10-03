@@ -18,167 +18,16 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class SmoothingAlgorithm(Enum):
-    """Available smoothing algorithms."""
-    NONE = "none"
-    EMA = "ema"           # Exponential Moving Average
-    ONE_EURO = "one_euro"  # One Euro Filter (better for varying speeds)
-
-
-class SensitivityMode(Enum):
-    """Cursor sensitivity modes."""
-    PRECISION = "precision"  # 15% sensitivity - fine control
-    NORMAL = "normal"        # 40% sensitivity - default
-    FAST = "fast"            # 60% sensitivity - quick navigation
-
-
-@dataclass
-class CursorConfig:
-    """Configuration for cursor mapping and smoothing."""
-    # Screen dimensions (will be auto-detected if not set)
-    screen_width: int = 1920
-    screen_height: int = 1080
-
-    # Camera frame dimensions (for normalization)
-    camera_width: int = 640
-    camera_height: int = 480
-
-    # Dead zone: ignore small movements around center (0.0 to 1.0 normalized)
-    dead_zone_radius: float = 0.02
-
-    # Sensitivity mode (overrides base_sensitivity)
-    sensitivity_mode: SensitivityMode = SensitivityMode.NORMAL
-
-    # Base sensitivity (1.0 = 1:1 mapping) - multiplied by mode factor
-    base_sensitivity: float = 1.0
-
-    # Sensitivity multipliers for each mode (reduced by 20%)
-    sensitivity_precision: float = 0.12  # 12% (was 15%)
-    sensitivity_normal: float = 0.32     # 32% (was 40%)
-    sensitivity_fast: float = 0.48       # 48% (was 60%)
-
-    # Acceleration curve: 1.0 = linear, >1.0 = accelerated
-    acceleration: float = 1.2
-
-    # Maximum cursor velocity (pixels per second) per §24
-    # Prevents runaway cursor when hand moves suddenly
-    max_velocity: int = 2000             # pixels/sec (benchmark: comfortable for 1080p)
-    max_velocity_precision: int = 500    # pixels/sec in precision mode
-
-    # Smoothing algorithm
-    smoothing: SmoothingAlgorithm = SmoothingAlgorithm.ONE_EURO
-
-    # EMA alpha (0.0 to 1.0, lower = more smoothing)
-    ema_alpha: float = 0.3
-
-    # One Euro Filter parameters
-    one_euro_min_cutoff: float = 1.0
-    one_euro_beta: float = 0.0
-    one_euro_d_cutoff: float = 1.0
-
-    # Invert axes if needed
-    invert_x: bool = False
-    invert_y: bool = False
-
-    # Use index finger tip (True) or palm center (False) as cursor point
-    use_index_tip: bool = True
-
-    # Multi-monitor support (§25)
-    monitor_count: int = 1               # Number of active monitors
-    monitor_arrangement: str = "horizontal"  # "horizontal" or "grid"
-    primary_monitor: int = 0             # Index of primary monitor
-    virtual_desktop_width: int = 0       # 0 = use sum of monitors
-    virtual_desktop_height: int = 0
-
-    @property
-    def effective_sensitivity(self) -> float:
-        """Get effective sensitivity based on current mode."""
-        mode_factors = {
-            SensitivityMode.PRECISION: self.sensitivity_precision,
-            SensitivityMode.NORMAL: self.sensitivity_normal,
-            SensitivityMode.FAST: self.sensitivity_fast,
-        }
-        return self.base_sensitivity * mode_factors.get(self.sensitivity_mode, self.sensitivity_normal)
-
-
-class OneEuroFilter:
-    """
-    One Euro Filter for smoothing with adaptive cutoff frequency.
-    Based on: https://cristal.univ-lille.fr/~casiez/1euro/
-    """
-
-    def __init__(self, min_cutoff: float = 1.0, beta: float = 0.0, d_cutoff: float = 1.0):
-        self.min_cutoff = min_cutoff
-        self.beta = beta
-        self.d_cutoff = d_cutoff
-        self.x_prev: Optional[float] = None
-        self.dx_prev: Optional[float] = None
-        self.t_prev: Optional[float] = None
-
-    def _alpha(self, cutoff: float, dt: float) -> float:
-        """Compute alpha for exponential smoothing."""
-        tau = 1.0 / (2 * math.pi * cutoff)
-        return 1.0 / (1.0 + tau / dt)
-
-    def filter(self, x: float, t: Optional[float] = None) -> float:
-        """Filter a value with timestamp."""
-        if t is None:
-            t = time.monotonic()
-
-        if self.x_prev is None:
-            self.x_prev = x
-            self.dx_prev = 0.0
-            self.t_prev = t
-            return x
-
-        dt = t - self.t_prev
-        if dt <= 0:
-            dt = 1e-3
-
-        # Estimate derivative
-        dx = (x - self.x_prev) / dt
-
-        # Filter derivative
-        a_d = self._alpha(self.d_cutoff, dt)
-        dx_hat = a_d * dx + (1 - a_d) * self.dx_prev
-
-        # Compute adaptive cutoff
-        cutoff = self.min_cutoff + self.beta * abs(dx_hat)
-
-        # Filter signal
-        a = self._alpha(cutoff, dt)
-        x_hat = a * x + (1 - a) * self.x_prev
-
-        # Update state
-        self.x_prev = x_hat
-        self.dx_prev = dx_hat
-        self.t_prev = t
-
-        return x_hat
-
-    def reset(self):
-        """Reset filter state."""
-        self.x_prev = None
-        self.dx_prev = None
-        self.t_prev = None
-
-
-class EMASmoother:
-    """Exponential Moving Average smoother."""
-
-    def __init__(self, alpha: float = 0.3):
-        self.alpha = alpha
-        self.value: Optional[float] = None
-
-    def smooth(self, x: float) -> float:
-        if self.value is None:
-            self.value = x
-            return x
-        self.value = self.alpha * x + (1 - self.alpha) * self.value
-        return self.value
-
-    def reset(self):
-        self.value = None
+from airmouse.control.smoothing import (
+    SmoothingAlgorithm, 
+    SensitivityMode, 
+    CursorConfig,
+    SmoothingConfig,
+    SmoothingFilter,
+    EmaFilter,
+    OneEuroFilter,
+    SmoothingFilterFactory
+)
 
 
 class CursorController:
@@ -193,21 +42,15 @@ class CursorController:
         self._camera_width = self.config.camera_width
         self._camera_height = self.config.camera_height
 
-        # Smoothers for X and Y
-        if self.config.smoothing == SmoothingAlgorithm.ONE_EURO:
-            self._smoother_x = OneEuroFilter(
-                min_cutoff=self.config.one_euro_min_cutoff,
-                beta=self.config.one_euro_beta,
-                d_cutoff=self.config.one_euro_d_cutoff
-            )
-            self._smoother_y = OneEuroFilter(
-                min_cutoff=self.config.one_euro_min_cutoff,
-                beta=self.config.one_euro_beta,
-                d_cutoff=self.config.one_euro_d_cutoff
-            )
-        else:
-            self._smoother_x = EMASmoother(alpha=self.config.ema_alpha)
-            self._smoother_y = EMASmoother(alpha=self.config.ema_alpha)
+        # Create smoothing filters using factory - operate on [0,1] plane coordinates
+        smoothing_config = SmoothingConfig(
+            algorithm=self.config.smoothing,
+            ema_alpha=self.config.ema_alpha,
+            one_euro_min_cutoff=self.config.one_euro_min_cutoff,
+            one_euro_beta=self.config.one_euro_beta,
+            one_euro_d_cutoff=self.config.one_euro_d_cutoff,
+        )
+        self._smoother_x, self._smoother_y = SmoothingFilterFactory.create_pair(smoothing_config)
 
         # State
         self._last_position: Optional[Tuple[float, float]] = None
@@ -280,7 +123,13 @@ class CursorController:
         return (dx, dy)
 
     def _apply_acceleration(self, dx: float, dy: float) -> Tuple[float, float]:
-        """Apply acceleration curve to movement."""
+        """Apply velocity-based acceleration curve to movement per spec P5.
+        
+        Implements velocity-adaptive acceleration for smooth cursor control:
+        - Low velocity: higher acceleration for precision
+        - High velocity: reduced acceleration for control
+        - Sustained movements: consistent response
+        """
         if self.config.acceleration == 1.0:
             return (dx, dy)
 
@@ -288,9 +137,41 @@ class CursorController:
         if distance == 0:
             return (0.0, 0.0)
 
-        # Apply power curve for acceleration
-        factor = distance ** (self.config.acceleration - 1.0)
-        return (dx * factor, dy * factor)
+        # Get previous velocity for adaptive acceleration
+        prev_velocity = getattr(self, '_last_velocity', 0.0)
+        current_velocity = distance
+
+        # Base acceleration factor (same as before)
+        base_factor = distance ** (self.config.acceleration - 1.0)
+        
+        # Velocity-based adaptive adjustment
+        # At low velocity: moderate acceleration boost for precision
+        # At high velocity: reduced acceleration for control
+        # This creates a smoother response curve across velocity ranges
+        
+        max_vel = self.config.max_velocity
+        velocity_ratio = min(current_velocity / max_vel, 1.0)
+        
+        # Velocity factor: reduces acceleration at high speeds
+        if velocity_ratio < 0.3:
+            velocity_factor = 1.0 + (0.3 - velocity_ratio) * 0.5  # Boost at very low speed
+        elif velocity_ratio > 0.7:
+            velocity_factor = 1.0 - (velocity_ratio - 0.7) * 0.3  # Reduce at high speed
+        else:
+            velocity_factor = 1.0  # Normal at medium speed
+        
+        # Apply smooth transition to avoid sudden jumps
+        if prev_velocity > 0 and abs(velocity_factor - 1.0) > 0.2:
+            transition_factor = min(0.5, (current_velocity - prev_velocity) / max_vel)
+            velocity_factor = velocity_factor * (1.0 - transition_factor) + 1.0 * transition_factor
+        
+        # Final acceleration factor
+        adaptive_factor = base_factor * velocity_factor
+        
+        # Update velocity for next frame
+        self._last_velocity = current_velocity
+        
+        return (dx * adaptive_factor, dy * adaptive_factor)
 
     def _apply_sensitivity(self, dx: float, dy: float) -> Tuple[float, float]:
         """Apply sensitivity multiplier."""
@@ -347,6 +228,11 @@ class CursorController:
         x_norm = max(0.0, min(1.0, x_norm))
         y_norm = max(0.0, min(1.0, y_norm))
 
+        # Apply smoothing on plane coordinates [0,1] (not screen pixels)
+        if self.config.smoothing != SmoothingAlgorithm.NONE:
+            x_norm = self._smoother_x.filter(x_norm, now)
+            y_norm = self._smoother_y.filter(y_norm, now)
+
         # Convert to screen coordinates
         screen_x, screen_y = self._normalize_to_screen(x_norm, y_norm)
 
@@ -359,11 +245,6 @@ class CursorController:
             dx, dy = self._clamp_velocity(dx, dy, dt)
             screen_x = self._last_position[0] + dx
             screen_y = self._last_position[1] + dy
-
-        # Apply smoothing
-        if self.config.smoothing != SmoothingAlgorithm.NONE:
-            screen_x = self._smoother_x.smooth(screen_x)
-            screen_y = self._smoother_y.smooth(screen_y)
 
         # Convert to integers
         result = (int(screen_x), int(screen_y))
@@ -438,10 +319,16 @@ class CursorController:
             self._last_plane_position = (x_norm, y_norm)
             return (0, 0)
 
+        # Apply smoothing on plane coordinates [0,1] BEFORE computing frame-to-frame delta
+        # This ensures smooth deltas, similar to how it works in map_hand_to_cursor
+        if self.config.smoothing != SmoothingAlgorithm.NONE:
+            x_norm = self._smoother_x.filter(x_norm, current_time)
+            y_norm = self._smoother_y.filter(y_norm, current_time)
+
         dx = x_norm - self._last_plane_position[0]
         dy = y_norm - self._last_plane_position[1]
 
-        # Update previous frame position for next call
+        # Update previous frame position for next call (after smoothing)
         self._last_plane_position = (x_norm, y_norm)
 
         # Apply dead zone

@@ -1,0 +1,37 @@
+[
+  {
+    "timestamp": "2026-09-22T22:51:04.240451",
+    "severity": "info",
+    "error_type": "Exception",
+    "message": "Application started successfully",
+    "stack_trace": null,
+    "component": "main",
+    "context": {},
+    "actionable": false,
+    "recovery_action": null
+  },
+  {
+    "timestamp": "2026-09-22T22:51:04.240923",
+    "severity": "warning",
+    "error_type": "Exception",
+    "message": "Low memory detected",
+    "stack_trace": null,
+    "component": "system",
+    "context": {
+      "memory_available_mb": 128
+    },
+    "actionable": false,
+    "recovery_action": null
+  },
+  {
+    "timestamp": "2026-09-22T22:51:04.241145",
+    "severity": "error",
+    "error_type": "ValueError",
+    "message": "Invalid hand tracking parameters",
+    "stack_trace": null,
+    "component": "tracker",
+    "context": {},
+    "actionable": true,
+    "recovery_action": "Reset tracker"
+  }
+]

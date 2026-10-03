@@ -25,6 +25,7 @@ from .config import (
     CONFIG_FILE_NAME,
     PROFILES_DIR_NAME,
 )
+from .schema import CONFIG_SCHEMA, CONFIG_SCHEMA_VERSION, SensitivityMode, SmoothingAlgorithm
 from .profiles import ProfileManager, ProfileInfo
 
 __all__ = [
@@ -43,4 +44,8 @@ __all__ = [
     "PROFILES_DIR_NAME",
     "ProfileManager",
     "ProfileInfo",
+    "CONFIG_SCHEMA",
+    "CONFIG_SCHEMA_VERSION",
+    "SensitivityMode",
+    "SmoothingAlgorithm",
 ]

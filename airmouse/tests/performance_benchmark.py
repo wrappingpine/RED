@@ -70,9 +70,15 @@ class PerformanceBenchmark:
 
             mock_read.side_effect = generate_frame
 
-            # Mock trackers to simulate processing load
-            controller._hand_tracker.process = Mock(return_value=[])
-            controller._face_tracker.process = Mock(return_value=[])
+            # Initialize controller first
+            if not controller.initialize():
+                print("Failed to initialize controller")
+                return
+
+            # Mock trackers to simulate processing load (after initialization)
+            controller.hand_tracker.process = Mock(return_value=[])
+            if controller.face_tracker:
+                controller.face_tracker.process = Mock(return_value=[])
 
             controller.start()
 
@@ -102,8 +108,8 @@ class PerformanceBenchmark:
             self.memory_samples.append(mem)
 
             # Get frame time from performance monitor
-            if controller._performance_monitor:
-                stats = controller._performance_monitor.get_stats()
+            if controller.performance_monitor:
+                stats = controller.performance_monitor.get_stats()
                 if stats and 'frame_time_ms' in stats:
                     self.frame_times.append(stats['frame_time_ms'])
 

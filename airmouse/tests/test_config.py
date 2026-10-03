@@ -26,7 +26,7 @@ from airmouse.config import (
 from airmouse.config.config import CursorConfig, GestureConfig as GestureConfigFull
 from airmouse.config.profiles import (
     ProfileManager,
-    ProfileSource,
+    ProfileInfo,
 )
 from airmouse.control.cursor import (
     SmoothingAlgorithm, SensitivityMode
@@ -75,8 +75,8 @@ class TestProfileManager(unittest.TestCase):
 
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.pm = ProfileManager(self.temp_dir.name)
         self.mgr = ConfigManager(self.temp_dir.name)
-        self.pm = ProfileManager(self.mgr)
         self.mgr.load()  # Creates default config file
 
     def tearDown(self):
@@ -84,66 +84,68 @@ class TestProfileManager(unittest.TestCase):
 
     def test_create_profile(self):
         """Test creating a new profile."""
-        created = self.pm.create("my_profile", "My test profile")
-        self.assertIsNotNone(created)
-        self.assertTrue(created.exists())
-        self.assertIn("my_profile.json", str(created))
+        created = self.pm.save_profile("my_profile", {
+            "name": "my_profile",
+            "description": "My test profile",
+            "version": "1.0.0",
+            "cursor": {},
+            "tracking": {}
+        })
+        self.assertTrue(created)
+        profile_path = Path(self.temp_dir.name) / "my_profile.json"
+        self.assertTrue(profile_path.exists())
 
     def test_create_duplicate_fails(self):
-        """Test creating duplicate profile fails gracefully."""
-        self.pm.create("dup")
-        created = self.pm.create("dup")
-        self.assertIsNone(created)
+        """Test creating duplicate profile overwrites."""
+        self.pm.save_profile("dup", {"name": "dup", "description": "", "version": "1.0.0", "cursor": {}, "tracking": {}})
+        created = self.pm.save_profile("dup", {"name": "dup", "description": "updated", "version": "1.0.0", "cursor": {}, "tracking": {}})
+        self.assertTrue(created)
 
     def test_list_profiles(self):
         """Test listing profiles."""
-        self.pm.create("p1")
-        self.pm.create("p2")
+        self.pm.save_profile("p1", {"name": "p1", "description": "", "version": "1.0.0", "cursor": {}, "tracking": {}})
+        self.pm.save_profile("p2", {"name": "p2", "description": "", "version": "1.0.0", "cursor": {}, "tracking": {}})
         listed = self.pm.list_profiles()
-        names = [p.name for p in listed]
-        self.assertGreaterEqual(len(names), 2)  # Should have at least our created ones
+        self.assertGreaterEqual(len(listed), 2)  # Should have at least our created ones
 
     def test_load_profile(self):
-        """Test loading a profile returns ProfileConfig."""
-        self.pm.create("loaded_profile")
+        """Test loading a profile returns config dict."""
+        self.pm.save_profile("loaded_profile", {"name": "loaded_profile", "description": "test desc", "version": "1.0.0", "cursor": {}, "tracking": {}})
         
         loaded = self.pm.load_profile("loaded_profile")
         self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.name, "loaded_profile")
-        self.assertEqual(loaded.description, "")
-        self.assertEqual(loaded.source, ProfileSource.APP_SPECIFIC)
+        self.assertEqual(loaded.get("name"), "loaded_profile")
+        self.assertEqual(loaded.get("description"), "test desc")
 
     def test_export_profile(self):
         """Test exporting profile to external path."""
-        self.pm.create("export_me")
+        self.pm.save_profile("export_me", {"name": "export_me", "description": "", "version": "1.0.0", "cursor": {}, "tracking": {}})
         export_path = Path(self.temp_dir.name) / "exported.json"
-        self.assertTrue(self.pm.export_profile("export_me", export_path))
+        self.assertTrue(self.pm.export_profile("export_me", str(export_path)))
         self.assertTrue(export_path.exists())
 
     def test_import_profile(self):
         """Test importing profile from external path."""
         # Create a simple valid JSON profile
         import_me_path = Path(self.temp_dir.name) / "import_me.json"
-        import_me_path.write_text('{"name":"test_import","description":"test"}')
-        imported = self.pm.import_profile(import_me_path)
-        self.assertIsNotNone(imported)
-        self.assertTrue(imported.exists())
-        loaded = self.pm.load_profile("test_import")
+        import_me_path.write_text('{"name":"import_me","description":"test","version":"1.0.0","cursor":{},"tracking":{}}')
+        imported = self.pm.import_profile(str(import_me_path))
+        self.assertTrue(imported)
+        loaded = self.pm.load_profile("import_me")
         self.assertIsNotNone(loaded)
-        self.assertEqual(loaded.name, "test_import")
+        self.assertEqual(loaded.get("name"), "import_me")
 
     def test_delete_profile(self):
         """Test deleting a user-created profile."""
-        self.pm.create("to_delete")
-        self.assertTrue(self.pm.delete("to_delete"))
+        self.pm.save_profile("to_delete", {"name": "to_delete", "description": "", "version": "1.0.0", "cursor": {}, "tracking": {}})
+        self.assertTrue(self.pm.delete_profile("to_delete"))
         # After deletion, our created profile should be gone
-        # (system profiles remain)
-        deleted = self.pm.get_profile("to_delete")
-        self.assertIsNone(deleted)
+        profiles = self.pm.list_profiles()
+        self.assertNotIn("to_delete", profiles)
 
     def test_delete_nonexistent_fails(self):
         """Test deleting non-existent profile returns False."""
-        self.assertFalse(self.pm.delete("nonexistent"))
+        self.assertFalse(self.pm.delete_profile("nonexistent"))
 
 
 class TestDefaultConfig(unittest.TestCase):

@@ -79,12 +79,24 @@ class ConfidenceInfo:
             self.frames_in_state += 1
     
     def _classify(self, raw_confidence: float, evidence: str) -> ConfidenceState:
-        """Classify raw confidence into explicit states."""
-        if raw_confidence >= 0.85:
+        """Classify raw confidence into explicit states with hysteresis.
+
+        Uses both current value and recent history to prevent rapid state
+        oscillation (ping-pong) when confidence fluctuates near thresholds.
+        """
+        # Use recent history for hysteresis if available
+        if len(self._recent_confidences) >= 3:
+            avg_recent = sum(self._recent_confidences[-3:]) / 3
+            # Blend current with recent average for stability
+            effective_confidence = 0.6 * raw_confidence + 0.4 * avg_recent
+        else:
+            effective_confidence = raw_confidence
+
+        if effective_confidence >= 0.80:
             return ConfidenceState.HIGH
-        elif raw_confidence >= 0.50:
+        elif effective_confidence >= 0.45:
             return ConfidenceState.MEDIUM
-        elif raw_confidence >= 0.15:
+        elif effective_confidence >= 0.15:
             return ConfidenceState.LOW
         else:
             return ConfidenceState.LOST

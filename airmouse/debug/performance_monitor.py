@@ -372,6 +372,44 @@ class PerformanceMonitor:
             self._metrics.cursor_pos = cursor_pos
             self._metrics.cursor_velocity = cursor_velocity
 
+    def get_stats(self) -> Dict[str, Any]:
+        """
+        Get performance statistics as a dictionary.
+        
+        Returns:
+            Dictionary with performance metrics for external consumption.
+        """
+        with self._lock:
+            return {
+                'fps': self._metrics.fps,
+                'frame_time_ms': self._metrics.frame_time_ms,
+                'hand_detection_ms': self._metrics.hand_detection_ms,
+                'face_detection_ms': self._metrics.face_detection_ms,
+                'tracking_ms': self._metrics.tracking_ms,
+                'gesture_ms': self._metrics.gesture_ms,
+                'cursor_ms': self._metrics.cursor_ms,
+                'mouse_ms': self._metrics.mouse_ms,
+                'cpu_percent': self._metrics.cpu_percent,
+                'memory_mb': self._metrics.memory_mb,
+                'brightness': self._metrics.brightness,
+                'hand_detected': self._metrics.hand_detected,
+                'face_detected': self._metrics.face_detected,
+                'hand_state': self._metrics.hand_state,
+                'active_gestures': self._metrics.active_gestures,
+                'dropped_frames': self._metrics.dropped_frames,
+                'tracking_losses': self._metrics.tracking_losses,
+                'false_gestures': self._metrics.false_gestures,
+                'false_clicks': self._metrics.false_clicks,
+                'frame_count': self._metrics.frame_count,
+                'camera_to_landmark_ms': self._metrics.camera_to_landmark_ms,
+                'landmark_to_pointer_ms': self._metrics.landmark_to_pointer_ms,
+                'end_to_end_ms': self._metrics.end_to_end_ms,
+                'cpu_peak_percent': self._metrics.cpu_peak_percent,
+                'memory_peak_mb': self._metrics.memory_peak_mb,
+                'memory_idle_mb': self._metrics.memory_idle_mb,
+                'memory_tracking_mb': self._metrics.memory_tracking_mb,
+            }
+
     def draw_overlay(self, frame: np.ndarray) -> np.ndarray:
         """Draw performance overlay on frame. Returns annotated frame."""
         if not self._enabled:

@@ -1,10 +1,5 @@
-"""
-Tests for cursor vibration measurement and stability per spec §23.
-
-Cursor vibration is a first-class engineering problem. A fix is not considered
-successful because the cursor "looks smoother." It must reduce measurable
-unwanted motion without introducing unacceptable latency.
-"""
+# Cursor vibration metrics and jitter reduction are now measured via PerformanceMonitor
+# Tests for OneEuroFilter remain unchanged.
 
 import unittest
 import time
@@ -15,7 +10,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from airmouse.control.cursor import OneEuroFilter, EMASmoother
+from airmouse.control.smoothing import OneEuroFilter, EmaFilter
 
 
 class TestOneEuroFilter(unittest.TestCase):
@@ -120,14 +115,14 @@ class TestOneEuroFilter(unittest.TestCase):
 
 
 class TestEMASmoother(unittest.TestCase):
-    """Tests for EMA smoother."""
+    """Tests for EMA smoother (EmaFilter)."""
 
     def test_basic_smoothing(self):
         """EMA should smooth signal."""
-        smoother = EMASmoother(alpha=0.3)
+        smoother = EmaFilter(alpha=0.3)
         
         values = [float(i) for i in range(10)]
-        smoothed = [smoother.smooth(v) for v in values]
+        smoothed = [smoother.filter(v) for v in values]
         
         # Smoothed values should be closer to each other than raw values
         raw_diff = abs(values[-1] - values[0])
@@ -138,13 +133,13 @@ class TestEMASmoother(unittest.TestCase):
 
     def test_reset(self):
         """Reset should clear state."""
-        smoother = EMASmoother(alpha=0.3)
+        smoother = EmaFilter(alpha=0.3)
         
-        smoother.smooth(0.5)
+        smoother.filter(0.5)
         smoother.reset()
         
         # After reset, next value should be returned as-is
-        result = smoother.smooth(1.0)
+        result = smoother.filter(1.0)
         self.assertEqual(result, 1.0, 
                         "After reset, first value should pass through")
 

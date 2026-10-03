@@ -13,14 +13,53 @@ Provides deep, structured observability into the entire airmouse system per spec
 import os
 import sys
 import time
+import json
 import psutil
 import logging
 import platform
 from pathlib import Path
 from dataclasses import dataclass, field, asdict
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class PipelineStageTiming:
+    """Structured record for a single pipeline stage execution time (FR-009)."""
+    stage_name: str
+    duration_ms: float
+    timestamp: str  # ISO 8601
+    frame_id: int
+
+    def to_json(self) -> str:
+        return json.dumps(asdict(self))
+
+
+class PipelineTimingLogger:
+    """Non-blocking structured JSON logger for pipeline stage timings."""
+
+    def __init__(self, log_level: int = logging.DEBUG):
+        self._logger = logging.getLogger("airmouse.pipeline.timings")
+        self._logger.setLevel(log_level)
+
+    def log_stage(self, stage_name: str, duration_ms: float, frame_id: int, timestamp: Optional[float] = None) -> PipelineStageTiming:
+        """Record and log stage timing in structured JSON format."""
+        iso_ts = datetime.now(timezone.utc).isoformat() if timestamp is None else datetime.fromtimestamp(timestamp, timezone.utc).isoformat()
+        timing = PipelineStageTiming(
+            stage_name=stage_name,
+            duration_ms=round(duration_ms, 3),
+            timestamp=iso_ts,
+            frame_id=frame_id
+        )
+        self._logger.debug(timing.to_json())
+        return timing
+
+
+# Global timing logger singleton
+pipeline_timing_logger = PipelineTimingLogger()
+
 
 
 @dataclass

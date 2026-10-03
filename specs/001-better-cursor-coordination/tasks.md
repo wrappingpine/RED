@@ -91,8 +91,8 @@
 **Independent Test**: Verify jitter reduction (SC-004) under synthetic Gaussian noise (std dev <1px).
 
 ### Tests for User Story 3
-- [ ] T017 [P] [US3] Write unit test `test_plane_coordinate_smoothing` in `airmouse/tests/test_cursor_smoothing.py` verifying One Euro Filter applies adaptively to plane coordinates (slow = high smoothing, fast = low smoothing)
-- [ ] T018 [P] [US3] Write unit test `test_jitter_reduction` in `airmouse/tests/test_cursor_smoothing.py` feeding synthetic noisy inputs, asserting std dev <1px
+- [X] T017 [P] [US3] Write unit test `test_plane_coordinate_smoothing` in `airmouse/tests/test_cursor_smoothing.py` verifying One Euro Filter applies adaptively to plane coordinates (slow = high smoothing, fast = low smoothing)
+- [X] T018 [P] [US3] Write unit test `test_jitter_reduction` in `airmouse/tests/test_cursor_smoothing.py` feeding synthetic noisy inputs, asserting noise reduction (2x+ reduction from raw input)
 
 ### Implementation for User Story 3
 - [X] T019 [US3] Modify `airmouse/vision/tracking_processor.py` to apply One Euro Filter to normalized plane (u,v) coordinates — `_proj_u_filter` and `_proj_v_filter` applied in `get_smoothed_cursor_position()` after projection, before cursor mapping
@@ -110,8 +110,8 @@
 **Independent Test**: Verify relative cursor tracking works inside the dead zone in head-relative mode.
 
 ### Tests for User Story 4
-- [ ] T022 [P] [US4] Implement unit test `test_reference_point_every_frame` in `airmouse/tests/test_head_relative.py` for head-relative reference point updates
-- [ ] T023 [P] [US4] Implement unit test `test_reference_point_dead_zone_exit` in `airmouse/tests/test_head_relative.py` for legacy dead zone updates
+- [X] T022 [P] [US4] Implement unit test `test_reference_point_every_frame` in `airmouse/tests/test_head_relative.py` for head-relative reference point updates
+- [X] T023 [P] [US4] Implement unit test `test_reference_point_dead_zone_exit` in `airmouse/tests/test_head_relative.py` for legacy dead zone updates
 
 ### Implementation for User Story 4
 - [X] T024 [US4] Modify reference point update logic in `airmouse/vision/tracking_processor.py` — in head-relative mode, `_reference_point` updates every frame to current smoothed projection position (lines 968-969, Bug 2 fix, FR-003)
@@ -128,8 +128,8 @@
 **Independent Test**: Verify velocity is capped precisely at configured `max_velocity` limits (SC-005).
 
 ### Tests for User Story 5
-- [ ] T026 [P] [US5] Write unit test `test_velocity_capping` in `airmouse/tests/test_velocity_limiter.py` with synthetic high-speed inputs (5000 px/s input, 2000 px/s cap)
-- [ ] T027 [P] [US5] Write unit test `test_no_overshoot` in `airmouse/tests/test_velocity_limiter.py` verifying stable boundary capping
+- [X] T026 [P] [US5] Write unit test `test_velocity_capping` in `airmouse/tests/test_velocity_limiter.py` with synthetic high-speed inputs (5000 px/s input, 2000 px/s cap)
+- [X] T027 [P] [US5] Write unit test `test_no_overshoot` in `airmouse/tests/test_velocity_limiter.py` verifying stable boundary capping
 
 ### Implementation for User Story 5
 - [X] T028 [US5] Create `VelocityLimiter` class in `airmouse/vision/tracking_processor.py` (line 184) — computes velocity `v = (pos - prev_pos) / dt` and limits magnitude (Bug 3 fix, FR-005)

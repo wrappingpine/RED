@@ -36,6 +36,8 @@ from .cursor import CursorController, CursorConfig, SmoothingAlgorithm, get_scre
 from ..debug.performance_monitor import PerformanceMonitor
 from ..brightness import AutoBrightnessController, BrightnessConfig, BrightnessState
 
+from airmouse.utils.error_logging import get_error_logger
+
 logger = logging.getLogger(__name__)
 
 
@@ -851,6 +853,12 @@ class AirMouseController:
         """Main processing loop with frame coordination."""
         frame_interval = 1.0 / self.config.target_fps
 
+        # Camera recovery state (spec §48: handle camera disappearance + recovery)
+        self._camera_consecutive_failures = 0
+        self._camera_max_failures_before_recovery = 15  # ~0.5s at 30fps
+        self._camera_recovery_backoff = 1.0  # seconds between recovery attempts
+        self._camera_last_recovery_attempt = 0.0
+
         while self._running and not self._stop_event.is_set():
             loop_start = time.time()
 
@@ -861,9 +869,33 @@ class AirMouseController:
             ret, frame = self.camera.read_frame()
             if not ret or frame is None:
                 self.stats.frames_dropped += 1
+                self._camera_consecutive_failures += 1
+
+                # Check if camera needs recovery (spec §48)
+                if self._camera_consecutive_failures >= self._camera_max_failures_before_recovery:
+                    now = time.time()
+                    if now - self._camera_last_recovery_attempt >= self._camera_recovery_backoff:
+                        logger.warning(
+                            f"Camera read failed {self._camera_consecutive_failures} times, "
+                            f"attempting recovery..."
+                        )
+                        if self._recover_camera():
+                            self._camera_consecutive_failures = 0
+                            self._set_status("camera_recovered", {})
+                        else:
+                            self._camera_last_recovery_attempt = now
+                    # Brief sleep to avoid busy-looping during recovery backoff
+                    time.sleep(0.05)
+                else:
+                    time.sleep(0.001)
+
                 self.performance_monitor.update_frame_end()
-                time.sleep(0.001)
                 continue
+
+            # Reset failure counter on successful read
+            if self._camera_consecutive_failures > 0:
+                logger.info(f"Camera recovered after {self._camera_consecutive_failures} failures")
+                self._camera_consecutive_failures = 0
 
             # Get camera timestamp (approximate)
             camera_timestamp = time.time()
@@ -957,9 +989,13 @@ class AirMouseController:
             if hands:
                 # Hands detected but confidence too low
                 max_conf = max((h.confidence for h in hands), default=0.0)
-                if max_conf < 0.4:
+                # Only trigger loss if confidence is truly lost (< 0.15)
+                # Borderline hands (0.15-0.40) should not cause constant tracking loss
+                if max_conf < 0.15:
                     self._tracking_status.record_hand_lost(LostReason.CONFIDENCE_DROP,
                                                            f"confidence={max_conf:.2f}")
+                # else: hands exist but confidence is low - don't trigger loss
+                # The tracking processor already filtered them out
             else:
                 self._tracking_status.record_hand_lost(LostReason.NO_HAND_DETECTED)
 
@@ -1356,8 +1392,70 @@ class AirMouseController:
 
         self.stats.last_update = current_time
 
+        # Update performance monitor with system stats (every 10 frames)
+        if self.stats.frames_processed % 10 == 0:
+            self.performance_monitor.update_system_stats()
+
         if self.on_stats_update:
             self.on_stats_update(self.stats)
+
+    def _recover_camera(self) -> bool:
+        """Attempt to recover from camera failure per spec §48.
+
+        Closes and reopens the camera, trying alternative devices if the
+        current one fails. The device index may have changed (e.g., a USB
+        camera replugged) so we re-detect rather than assume the original
+        index is still valid.
+
+        Returns:
+            True if recovery succeeded, False otherwise.
+        """
+        logger.info("Attempting camera recovery...")
+
+        # Release frozen input before recovery attempt
+        if self.input_manager:
+            try:
+                self.input_manager.release_all()
+            except Exception:
+                pass
+
+        # Close current camera
+        try:
+            self.camera.close_camera()
+        except Exception as e:
+            logger.warning(f"Camera close error during recovery: {e}")
+
+        # Re-detect cameras - the device may have changed (spec §48)
+        try:
+            cameras = self.camera.detect_cameras()
+            if not cameras:
+                logger.error("Camera recovery failed: no devices detected")
+                return False
+
+            # Try each available camera until one works
+            available = [c for c in cameras if c.available]
+            if not available:
+                logger.error("Camera recovery failed: no available devices")
+                return False
+
+            for cam in available:
+                logger.info(f"Trying camera {cam.device_path} (index {cam.index})...")
+                self.config.camera.device_index = cam.index
+                self.config.camera.device_path = cam.device_path
+                if self.camera.open_camera(self.config.camera):
+                    logger.info(f"Camera recovered: {cam.device_path}")
+                    # Update cursor config with actual resolution
+                    actual_width, actual_height = self.camera.get_resolution()
+                    if self.cursor_controller:
+                        self.config.cursor.camera_width = actual_width
+                        self.config.cursor.camera_height = actual_height
+                    return True
+
+            logger.error("Camera recovery failed: all devices failed to open")
+            return False
+        except Exception as e:
+            logger.error(f"Camera recovery error: {e}")
+            return False
 
     def _set_status(self, status: str, data: dict):
         """Update status via callback."""

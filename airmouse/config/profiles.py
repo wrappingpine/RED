@@ -1,598 +1,895 @@
 """
-Application Profiles System for AirMouse (§36-38).
+Configuration Profile Manager for AirMouse
 
-Handles creation, editing, deletion, import and export of named profiles.
+Handles profile loading, saving, and validation for airmouse configuration profiles.
+Simple JSON-based profile system for P1.10 Configuration Profiles.
 """
 
-import logging
-import shutil
-import sys
-import time
 import json
+import logging
 from pathlib import Path
-from typing import Dict, Optional, Any, List, Union
-from dataclasses import dataclass, field, asdict
-from enum import Enum
-import fnmatch
+from typing import Dict, List, Any, Optional
+from datetime import datetime, timezone
+
+from airmouse.config.schema import (
+    CONFIG_SCHEMA, CONFIG_SCHEMA_VERSION, 
+    SensitivityMode, SmoothingAlgorithm, PreferredHandedness
+)
 
 logger = logging.getLogger(__name__)
 
-
-class ProfileSource(Enum):
-    """Source of profile configuration."""
-    GLOBAL = "global"
-    APP_SPECIFIC = "app_specific"
-    USER_OVERRIDE = "user_override"
-    AUTO_DETECTED = "auto_detected"
-
-
-@dataclass
-class ProfileConfig:
-    """Configuration for a single application profile."""
-    name: str
-    description: str = ""
-    
-    # Cursor modifications
-    cursor_sensitivity_mode: Optional[str] = None  # "precision", "normal", "fast"
-    cursor_base_sensitivity: Optional[float] = None
-    cursor_acceleration: Optional[float] = None
-    cursor_smoothing: Optional[str] = None
-    cursor_dead_zone_radius: Optional[float] = None
-    cursor_invert_x: Optional[bool] = None
-    cursor_invert_y: Optional[bool] = None
-    cursor_use_index_tip: Optional[bool] = None
-    cursor_max_velocity: Optional[int] = None
-    cursor_max_velocity_precision: Optional[int] = None
-    
-    # Gesture modifications
-    gesture_pinch_enter_threshold: Optional[float] = None
-    gesture_pinch_confirm_threshold: Optional[float] = None
-    gesture_pinch_release_threshold: Optional[float] = None
-    gesture_scroll_sensitivity: Optional[float] = None
-    gesture_scroll_cooldown: Optional[float] = None
-    gesture_fist_hold_time: Optional[float] = None
-    gesture_drag_hold_time: Optional[float] = None
-    gesture_click_max_duration: Optional[float] = None
-    gesture_click_max_movement: Optional[float] = None
-    gesture_gesture_cooldown: Optional[float] = None
-    gesture_enable_two_hand: Optional[bool] = None
-    gesture_clutch_enabled: Optional[bool] = None
-    gesture_clutch_trigger_gesture: Optional[str] = None
-    gesture_clutch_timeout: Optional[float] = None
-    gesture_conflict_resolution: Optional[bool] = None
-    
-    # Input mapping modifications
-    input_left_click_action: Optional[str] = None  # "left_click", "right_click", "middle_click", "custom"
-    input_right_click_action: Optional[str] = None
-    input_middle_click_action: Optional[str] = None
-    input_scroll_up_action: Optional[str] = None
-    input_scroll_down_action: Optional[str] = None
-    input_scroll_horizontal_action: Optional[str] = None
-    input_drag_action: Optional[str] = None
-    input_pinch_confirm_action: Optional[str] = None
-    input_open_palm_action: Optional[str] = None
-    input_fist_action: Optional[str] = None
-    input_thumb_gesture_action: Optional[str] = None
-    input_two_hand_action: Optional[str] = None
-    
-    # Custom actions (app-specific shortcuts)
-    custom_actions: Dict[str, str] = field(default_factory=dict)
-    
-    # Profile metadata
-    source: ProfileSource = ProfileSource.APP_SPECIFIC
-    priority: int = 50  # Higher = more specific
-    enabled: bool = True
-    auto_detect_patterns: List[str] = field(default_factory=list)  # Window title/class patterns
-    
-    def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for serialization."""
-        d = asdict(self)
-        d['source'] = self.source.value
-        return d
-    
-    @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProfileConfig":
-        """Create from dictionary."""
-        data = data.copy()
-        if 'source' in data and isinstance(data['source'], str):
-            data['source'] = ProfileSource(data['source'])
-        return cls(**data)
-
+# Default configuration directory
+DEFAULT_CONFIG_DIR = Path.home() / ".airmouse"
+DEFAULT_PROFILES_DIR = DEFAULT_CONFIG_DIR / "profiles"
 
 # Built-in default profiles
 DEFAULT_PROFILES = {
-    "global": ProfileConfig(
-        name="global",
-        description="Default global profile - applies to all applications",
-        source=ProfileSource.GLOBAL,
-        priority=0,
-    ),
-    "chrome": ProfileConfig(
-        name="chrome",
-        description="Optimized for web browsing",
-        cursor_sensitivity_mode="normal",
-        cursor_acceleration=1.1,
-        gesture_scroll_sensitivity=0.003,
-        gesture_drag_hold_time=0.15,
-        auto_detect_patterns=["*Chrome*", "*Chromium*", "*Firefox*", "*Browser*"],
-        source=ProfileSource.APP_SPECIFIC,
-        priority=100,
-    ),
-    "code_editor": ProfileConfig(
-        name="code_editor",
-        description="Optimized for code editors (VS Code, Vim, etc.)",
-        cursor_sensitivity_mode="precision",
-        cursor_acceleration=1.0,
-        cursor_dead_zone_radius=0.015,
-        gesture_pinch_enter_threshold=0.04,
-        gesture_drag_hold_time=0.25,
-        auto_detect_patterns=["*VS Code*", "*Vim*", "*Neovim*", "*Sublime*", "*IntelliJ*", "*PyCharm*", "*Code*"],
-        source=ProfileSource.APP_SPECIFIC,
-        priority=100,
-    ),
-    "blender": ProfileConfig(
-        name="blender",
-        description="Optimized for Blender 3D",
-        cursor_sensitivity_mode="fast",
-        cursor_acceleration=1.5,
-        gesture_scroll_sensitivity=0.004,
-        gesture_enable_two_hand=True,
-        # Map gestures to Blender actions
-        input_left_click_action="select",
-        input_right_click_action="context_menu",
-        input_middle_click_action="pan",
-        input_scroll_up_action="zoom_in",
-        input_scroll_down_action="zoom_out",
-        input_drag_action="drag_select",
-        auto_detect_patterns=["*Blender*"],
-        source=ProfileSource.APP_SPECIFIC,
-        priority=100,
-    ),
-    "kicad": ProfileConfig(
-        name="kicad",
-        description="Optimized for KiCad PCB design",
-        cursor_sensitivity_mode="precision",
-        cursor_acceleration=1.0,
-        cursor_dead_zone_radius=0.01,
-        gesture_pinch_enter_threshold=0.035,
-        gesture_drag_hold_time=0.3,
-        auto_detect_patterns=["*KiCad*", "*pcbnew*", "*eeschema*"],
-        source=ProfileSource.APP_SPECIFIC,
-        priority=100,
-    ),
-    "media": ProfileConfig(
-        name="media",
-        description="Optimized for media players",
-        cursor_sensitivity_mode="normal",
-        gesture_scroll_sensitivity=0.005,
-        gesture_drag_hold_time=0.5,
-        # Map gestures to media controls
-        input_left_click_action="play_pause",
-        input_right_click_action="fullscreen",
-        input_scroll_up_action="volume_up",
-        input_scroll_down_action="volume_down",
-        input_scroll_horizontal_action="seek",
-        auto_detect_patterns=["*VLC*", "*MPV*", "*Spotify*", "*YouTube*", "*Netflix*", "*Plex*"],
-        source=ProfileSource.APP_SPECIFIC,
-        priority=100,
-    ),
-    "presentation": ProfileConfig(
-        name="presentation",
-        description="Optimized for presentations",
-        cursor_sensitivity_mode="precision",
-        gesture_drag_hold_time=0.5,
-        gesture_fist_hold_time=1.0,
-        # Map gestures to presentation controls
-        input_left_click_action="next_slide",
-        input_right_click_action="previous_slide",
-        input_open_palm_action="pause_presentation",
-        input_thumb_gesture_action="laser_pointer",
-        auto_detect_patterns=["*PowerPoint*", "*LibreOffice Impress*", "*Keynote*", "*Slides*"],
-        source=ProfileSource.APP_SPECIFIC,
-        priority=100,
-    ),
-    "gaming": ProfileConfig(
-        name="gaming",
-        description="Optimized for gaming (mouse-like control)",
-        cursor_sensitivity_mode="fast",
-        cursor_acceleration=2.0,
-        cursor_max_velocity=5000,
-        cursor_max_velocity_precision=1000,
-        gesture_pinch_enter_threshold=0.04,
-        gesture_drag_hold_time=0.1,
-        gesture_enable_two_hand=False,
-        auto_detect_patterns=["*Steam*", "*Lutris*", "*Heroic*", "*Game*"],
-        source=ProfileSource.APP_SPECIFIC,
-        priority=100,
-    ),
+    "precision": {
+        "name": "Precision Mode",
+        "description": "High-precision, stable configuration for detailed work",
+        "version": CONFIG_SCHEMA_VERSION,
+        "author": "Air Mouse Team",
+        "created": datetime.now(timezone.utc).isoformat(),
+        "modified": datetime.now(timezone.utc).isoformat(),
+        
+        "cursor": {
+            "screen_width": 1920,
+            "screen_height": 1080,
+            "camera_width": 1280,
+            "camera_height": 720,
+            "dead_zone_radius": 0.01,
+            "sensitivity_mode": SensitivityMode.PRECISION.value,
+            "base_sensitivity": 1.0,
+            "sensitivity_precision": 0.12,
+            "sensitivity_normal": 0.32,
+            "sensitivity_fast": 0.48,
+            "acceleration": 1.2,
+            "max_velocity": 500,
+            "smoothing": SmoothingAlgorithm.ONE_EURO.value,
+            "ema_alpha": 0.3,
+            "one_euro_min_cutoff": 2.0,
+            "one_euro_beta": 0.01,
+            "one_euro_d_cutoff": 2.0,
+            "invert_x": False,
+            "invert_y": False,
+            "use_index_tip": True,
+            "monitor_count": 1,
+            "monitor_arrangement": "horizontal",
+            "primary_monitor": 0
+        },
+        
+        "tracking": {
+            "min_hand_confidence": 0.8,
+            "min_landmark_visibility": 0.7,
+            "min_face_confidence": 0.7,
+            "preferred_handedness": PreferredHandedness.RIGHT.value,
+            "max_landmark_jump": 0.15,
+            "max_wrist_jump": 0.6,
+            "max_hand_center_jump": 0.25,
+            "one_euro_min_cutoff": 2.0,
+            "one_euro_beta": 0.01,
+            "one_euro_d_cutoff": 2.0,
+            "dead_zone_radius": 0.015,
+            "max_velocity": 0.3,
+            "velocity_smoothing": 0.2,
+            "max_lost_frames": 20,
+            "reset_on_large_jump": True,
+            "stabilization_frames": 10,
+            "use_head_relative": True,
+            "virtual_plane_distance": 0.35,
+            "virtual_plane_width": 0.50,
+            "virtual_plane_height": 0.30,
+            "use_head_coords_for_ray": True,
+            "head_coords_smoothing_alpha": 0.4,
+            "head_confidence_threshold": 0.7,
+            "reference_point_update_mode": "every_frame",
+            "enable_two_hand": False,
+            "track_primary_only": True
+        },
+        
+        "gestures": {
+            "pinch_enter_threshold": 0.03,
+            "pinch_confirm_threshold": 0.025,
+            "pinch_release_threshold": 0.06,
+            "click_max_duration": 0.3,
+            "scroll_sensitivity": 0.8,
+            "scroll_dead_zone": 0.03,
+            "dwell_time": 0.3,
+            "gesture_hysteresis_frames": 5,
+            "phase_dwell_frames": 5,
+            "enable_drag": True,
+            "enable_scroll": True,
+            "enable_palm_control": True,
+            "enable_fist_gesture": True
+        },
+        
+        "hotkeys": {
+            "emergency_disable": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "A",
+                "callback": "emergency_disable"
+            },
+            "pause_resume": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "P"
+            },
+            "calibrate": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "C"
+            },
+            "settings": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "S"
+            },
+            "precision_toggle": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "M"
+            }
+        },
+        
+        "safety": {
+            "emergency_disable": {
+                "enabled": True,
+                "confirmation_required": True,
+                "cooldown_seconds": 10
+            },
+            "focus_safety": {
+                "enabled": True,
+                "check_interval_ms": 200
+            },
+            "input_health_monitoring": {
+                "enabled": True,
+                "health_check_interval_ms": 500,
+                "max_write_errors": 5,
+                "auto_recovery": True
+            },
+            "safety_gate": {
+                "enabled": True,
+                "require_stable_tracking": True,
+                "require_min_confidence": True,
+                "confidence_threshold": 0.7,
+                "max_latency_ms": 500
+            }
+        },
+        
+        "performance": {
+            "target_fps": 60,
+            "pipeline_latency_target_ms": 80,
+            "memory_limit_mb": 2048,
+            "enable_profiling": False,
+            "debug_logging": False
+        },
+        
+        "debug": {
+            "enable_visualization": False,
+            "landmark_visualization": False,
+            "projection_debug": False,
+            "gesture_debug": False,
+            "show_fps": False,
+            "show_latency": False,
+            "log_level": "INFO"
+        }
+    },
+    
+    "normal": {
+        "name": "Normal Mode",
+        "description": "Balanced configuration for general use",
+        "version": CONFIG_SCHEMA_VERSION,
+        "author": "Air Mouse Team",
+        "created": datetime.now(timezone.utc).isoformat(),
+        "modified": datetime.now(timezone.utc).isoformat(),
+        
+        "cursor": {
+            "screen_width": 1920,
+            "screen_height": 1080,
+            "camera_width": 1280,
+            "camera_height": 720,
+            "dead_zone_radius": 0.02,
+            "sensitivity_mode": SensitivityMode.NORMAL.value,
+            "base_sensitivity": 1.0,
+            "smoothing": SmoothingAlgorithm.ONE_EURO.value,
+            "ema_alpha": 0.3,
+            "one_euro_min_cutoff": 1.5,
+            "one_euro_beta": 0.007,
+            "one_euro_d_cutoff": 1.0,
+            "invert_x": False,
+            "invert_y": False,
+            "use_index_tip": True,
+            "monitor_count": 1,
+            "monitor_arrangement": "horizontal",
+            "primary_monitor": 0
+        },
+        
+        "tracking": {
+            "min_hand_confidence": 0.6,
+            "min_landmark_visibility": 0.5,
+            "min_face_confidence": 0.5,
+            "preferred_handedness": PreferredHandedness.RIGHT.value,
+            "max_landmark_jump": 0.15,
+            "max_wrist_jump": 0.5,
+            "max_hand_center_jump": 0.25,
+            "one_euro_min_cutoff": 1.0,
+            "one_euro_beta": 0.007,
+            "one_euro_d_cutoff": 1.0,
+            "dead_zone_radius": 0.015,
+            "max_velocity": 0.5,
+            "velocity_smoothing": 0.3,
+            "max_lost_frames": 15,
+            "reset_on_large_jump": True,
+            "stabilization_frames": 5,
+            "use_head_relative": True,
+            "virtual_plane_distance": 0.30,
+            "virtual_plane_width": 0.40,
+            "virtual_plane_height": 0.25,
+            "use_head_coords_for_ray": True,
+            "head_coords_smoothing_alpha": 0.3,
+            "head_confidence_threshold": 0.5,
+            "reference_point_update_mode": "every_frame",
+            "enable_two_hand": True,
+            "track_primary_only": False
+        },
+        
+        "gestures": {
+            "pinch_enter_threshold": 0.045,
+            "pinch_confirm_threshold": 0.040,
+            "pinch_release_threshold": 0.070,
+            "click_max_duration": 0.5,
+            "scroll_sensitivity": 1.0,
+            "scroll_dead_zone": 0.05,
+            "dwell_time": 0.5,
+            "gesture_hysteresis_frames": 3,
+            "phase_dwell_frames": 3,
+            "enable_drag": True,
+            "enable_scroll": True,
+            "enable_palm_control": True,
+            "enable_fist_gesture": True
+        },
+        
+        "hotkeys": {
+            "emergency_disable": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "A",
+                "callback": "emergency_disable"
+            },
+            "pause_resume": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "P"
+            },
+            "calibrate": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "C"
+            },
+            "settings": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "S"
+            },
+            "precision_toggle": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "M"
+            }
+        },
+        
+        "safety": {
+            "emergency_disable": {
+                "enabled": True,
+                "confirmation_required": False,
+                "cooldown_seconds": 5
+            },
+            "focus_safety": {
+                "enabled": True,
+                "check_interval_ms": 500
+            },
+            "input_health_monitoring": {
+                "enabled": True,
+                "health_check_interval_ms": 1000,
+                "max_write_errors": 10,
+                "auto_recovery": True
+            },
+            "safety_gate": {
+                "enabled": True,
+                "require_stable_tracking": True,
+                "require_min_confidence": True,
+                "confidence_threshold": 0.6,
+                "max_latency_ms": 1000
+            }
+        },
+        
+        "performance": {
+            "target_fps": 60,
+            "pipeline_latency_target_ms": 100,
+            "memory_limit_mb": 2048,
+            "enable_profiling": False,
+            "debug_logging": False
+        },
+        
+        "debug": {
+            "enable_visualization": False,
+            "landmark_visualization": False,
+            "projection_debug": False,
+            "gesture_debug": False,
+            "show_fps": False,
+            "show_latency": False,
+            "log_level": "INFO"
+        }
+    },
+    
+    "fast": {
+        "name": "Fast Mode",
+        "description": "High-speed configuration for quick navigation",
+        "version": CONFIG_SCHEMA_VERSION,
+        "author": "Air Mouse Team",
+        "created": datetime.now(timezone.utc).isoformat(),
+        "modified": datetime.now(timezone.utc).isoformat(),
+        
+        "cursor": {
+            "screen_width": 1920,
+            "screen_height": 1080,
+            "camera_width": 1280,
+            "camera_height": 720,
+            "dead_zone_radius": 0.03,
+            "sensitivity_mode": SensitivityMode.FAST.value,
+            "base_sensitivity": 1.0,
+            "smoothing": SmoothingAlgorithm.EMA.value,
+            "ema_alpha": 0.4,
+            "one_euro_min_cutoff": 3.0,
+            "one_euro_beta": 0.01,
+            "one_euro_d_cutoff": 3.0,
+            "invert_x": False,
+            "invert_y": False,
+            "use_index_tip": True,
+            "monitor_count": 1,
+            "monitor_arrangement": "horizontal",
+            "primary_monitor": 0
+        },
+        
+        "tracking": {
+            "min_hand_confidence": 0.4,
+            "min_landmark_visibility": 0.4,
+            "min_face_confidence": 0.4,
+            "preferred_handedness": PreferredHandedness.RIGHT.value,
+            "max_landmark_jump": 0.20,
+            "max_wrist_jump": 0.4,
+            "max_hand_center_jump": 0.30,
+            "one_euro_min_cutoff": 5.0,
+            "one_euro_beta": 0.01,
+            "one_euro_d_cutoff": 5.0,
+            "dead_zone_radius": 0.025,
+            "max_velocity": 1.0,
+            "velocity_smoothing": 0.1,
+            "max_lost_frames": 10,
+            "reset_on_large_jump": False,
+            "stabilization_frames": 3,
+            "use_head_relative": True,
+            "virtual_plane_distance": 0.25,
+            "virtual_plane_width": 0.60,
+            "virtual_plane_height": 0.20,
+            "use_head_coords_for_ray": True,
+            "head_coords_smoothing_alpha": 0.2,
+            "head_confidence_threshold": 0.4,
+            "reference_point_update_mode": "every_frame",
+            "enable_two_hand": True,
+            "track_primary_only": False
+        },
+        
+        "gestures": {
+            "pinch_enter_threshold": 0.06,
+            "pinch_confirm_threshold": 0.055,
+            "pinch_release_threshold": 0.080,
+            "click_max_duration": 0.8,
+            "scroll_sensitivity": 1.5,
+            "scroll_dead_zone": 0.07,
+            "dwell_time": 0.2,
+            "gesture_hysteresis_frames": 2,
+            "phase_dwell_frames": 2,
+            "enable_drag": True,
+            "enable_scroll": True,
+            "enable_palm_control": False,
+            "enable_fist_gesture": False
+        },
+        
+        "hotkeys": {
+            "emergency_disable": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "A",
+                "callback": "emergency_disable"
+            },
+            "pause_resume": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "P"
+            },
+            "calibrate": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "C"
+            },
+            "settings": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "S"
+            },
+            "precision_toggle": {
+                "enabled": True,
+                "modifiers": ["super", "alt"],
+                "key": "M"
+            }
+        },
+        
+        "safety": {
+            "emergency_disable": {
+                "enabled": True,
+                "confirmation_required": False,
+                "cooldown_seconds": 3
+            },
+            "focus_safety": {
+                "enabled": True,
+                "check_interval_ms": 1000
+            },
+            "input_health_monitoring": {
+                "enabled": True,
+                "health_check_interval_ms": 2000,
+                "max_write_errors": 20,
+                "auto_recovery": True
+            },
+            "safety_gate": {
+                "enabled": True,
+                "require_stable_tracking": False,
+                "require_min_confidence": True,
+                "confidence_threshold": 0.4,
+                "max_latency_ms": 2000
+            }
+        },
+        
+        "performance": {
+            "target_fps": 60,
+            "pipeline_latency_target_ms": 200,
+            "memory_limit_mb": 2048,
+            "enable_profiling": False,
+            "debug_logging": False
+        },
+        
+        "debug": {
+            "enable_visualization": False,
+            "landmark_visualization": False,
+            "projection_debug": False,
+            "gesture_debug": False,
+            "show_fps": False,
+            "show_latency": False,
+            "log_level": "INFO"
+        }
+    }
 }
-
-
 class ProfileManager:
     """
-    Manages application profiles with auto-detection and manual switching.
+    Simple configuration profile manager for AirMouse.
     
-    Per §36-38: Universal input + optional application profiles.
-    Core system never depends on profile detection.
+    Handles loading, saving, and validation of configuration profiles.
+    Provides built-in profiles (precision, normal, fast) and file-based profile management.
     """
-
-    def __init__(self, config_dir: Optional[Path] = None):
-        # Support both old API (ConfigManager) and new API (Path)
-        if config_dir is None:
-            from ..config import ConfigManager
-            config_dir = ConfigManager().profiles_dir
-        elif hasattr(config_dir, 'profiles_dir'):
-            # Old API: ConfigManager object
-            self.config_manager = config_dir
-            self.config_dir = config_dir.profiles_dir
-        else:
-            # New API: Path object
-            self.config_manager = None
-            self.config_dir = config_dir
-        
-        self.config_dir.mkdir(parents=True, exist_ok=True)
-        
-        self._profiles: Dict[str, ProfileConfig] = {}
-        self._current_profile: Optional[ProfileConfig] = None
-        self._current_app_name: str = "unknown"
-        self._detection_callback: Optional[Callable[[], str]] = None
-        self._profile_change_callback: Optional[Callable[[ProfileConfig], None]] = None
-        
-        # Load profiles
-        self._load_default_profiles()
-        self._load_user_profiles()
-        
-        # Start with global profile
-        self._current_profile = self._profiles.get("global")
-        if not self._current_profile:
-            self._current_profile = DEFAULT_PROFILES["global"]
     
-    def get_profiles_dir(self) -> Path:
-        """Return path to profiles directory."""
-        return self.config_dir
-
-    def _load_default_profiles(self):
-        """Load built-in default profiles."""
-        for name, profile in DEFAULT_PROFILES.items():
-            if name not in self._profiles:
-                self._profiles[name] = profile
-    
-    def _load_user_profiles(self):
-        """Load user-defined profiles from config directory."""
-        for profile_file in self.config_dir.glob("*.json"):
-            try:
-                with open(profile_file, 'r') as f:
-                    data = json.load(f)
-                profile = ProfileConfig.from_dict(data)
-                self._profiles[profile.name] = profile
-                logger.info(f"Loaded user profile: {profile.name}")
-            except Exception as e:
-                logger.warning(f"Failed to load profile {profile_file}: {e}")
-    
-    def get_profiles_dir(self) -> Path:
-        """Return path to profiles directory."""
-        return self.config_dir
-
-    def list_profiles(self):
-        """List all saved profiles."""
-        profiles = []
-        for name, profile in self._profiles.items():
-            # Create ProfileInfo for backward compatibility
-            profiles.append(type('ProfileInfo', (), {
-                'name': name,
-                'source_config_path': str(self.config_dir / f"{name}.json"),
-                'created_at': '',
-                'description': profile.description
-            })())
-        return profiles
-
-    def create(self, name: str, description: str = ""):
-        """Create a new profile named <name> with current config values."""
-        filename = self.config_dir / f"{name}.json"
-        if filename.exists():
-            logger.warning(f"Profile '{name}' already exists.")
-            return None
-
-        # Create profile with default values
-        profile = ProfileConfig(name=name, description=description)
-        self._profiles[name] = profile
+    def __init__(self, profiles_dir: Optional[str] = None):
+        """
+        Initialize profile manager.
         
-        # Save to file
-        self.save_profile(profile)
+        Args:
+            profiles_dir: Directory for user profiles. Defaults to ~/.airmouse/profiles
+        """
+        self.profiles_dir = Path(profiles_dir) if profiles_dir else DEFAULT_PROFILES_DIR
+        self.profiles_dir.mkdir(parents=True, exist_ok=True)
         
-        return filename
-
-    def save_profile(self, profile: ProfileConfig):
-        """Save a profile to config directory."""
-        profile_file = self.config_dir / f"{profile.name}.json"
+        self._default_profiles = DEFAULT_PROFILES.copy()
+        
+    def load_profile(self, name: str) -> Dict[str, Any]:
+        """
+        Load a configuration profile by name.
+        
+        Args:
+            name: Profile name ('precision', 'normal', 'fast', or custom profile filename)
+            
+        Returns:
+            Configuration dictionary
+            
+        Raises:
+            ValueError: If profile not found or invalid
+        """
+        if not name:
+            raise ValueError("Profile name cannot be empty")
+            
+        # Check built-in profiles
+        if name in self._default_profiles:
+            return self._default_profiles[name].copy()
+            
+        # Check custom profile file
+        profile_path = self.profiles_dir / f"{name}.json"
+        
+        if profile_path.exists():
+            return self._load_profile_from_file(profile_path)
+        
+        # Profile not found
+        available = list(self._default_profiles.keys()) + [
+            f.stem for f in self.profiles_dir.glob("*.json")
+        ]
+        raise ValueError(f"Profile '{name}' not found. Available: {', '.join(available)}")
+    
+    def save_profile(self, name: str, config: Dict[str, Any], make_backup: bool = True) -> bool:
+        """
+        Save a configuration profile.
+        
+        Args:
+            name: Profile name
+            config: Configuration dictionary
+            make_backup: Whether to create a backup
+            
+        Returns:
+            True if successful, False otherwise
+        """
         try:
-            with open(profile_file, 'w') as f:
-                json.dump(profile.to_dict(), f, indent=2)
-            logger.info(f"Saved profile: {profile.name}")
-        except Exception as e:
-            logger.error(f"Failed to save profile {profile.name}: {e}")
-
-    def load_profile(self, name: str):
-        """Load a profile returns ProfileConfig."""
-        profile = self._profiles.get(name)
-        if profile is None:
-            # Try to load from file
-            filename = self.config_dir / f"{name}.json"
-            if filename.exists():
-                try:
-                    with open(filename, 'r') as f:
-                        data = json.load(f)
-                    profile = ProfileConfig.from_dict(data)
-                    self._profiles[name] = profile
-                except Exception as e:
-                    logger.error(f"Failed to load profile {name}: {e}")
-                    return None
-            else:
-                return None
-        return profile
-
-    def export_profile(self, name: str, export_path: Union[str, Path]):
-        """Export profile to external path."""
-        profile = self._profiles.get(name)
-        if profile is None:
-            logger.warning(f"Profile '{name}' not found for export.")
-            return False
-        
-        try:
-            export_path = Path(export_path)
-            with open(export_path, 'w') as f:
-                json.dump(profile.to_dict(), f, indent=2)
-            logger.info(f"Exported profile '{name}' to {export_path}")
+            # Validate configuration
+            self._validate_config(config)
+            
+            # Update metadata
+            config = config.copy()
+            config["name"] = name
+            config["version"] = CONFIG_SCHEMA_VERSION
+            config["modified"] = datetime.now(timezone.utc).isoformat()
+            
+            # Save to profiles directory
+            profile_path = self.profiles_dir / f"{name}.json"
+            
+            # Create backup if requested
+            if make_backup:
+                self._create_backup(name, config)
+            
+            # Write profile to file
+            with open(profile_path, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            logger.info(f"Profile '{name}' saved successfully to {profile_path}")
             return True
+            
         except Exception as e:
-            logger.error(f"Failed to export profile {name}: {e}")
+            logger.error(f"Failed to save profile '{name}': {e}")
             return False
-
-    def import_profile(self, import_path: Union[str, Path]):
-        """Import profile from external path."""
+    
+    def list_profiles(self) -> List[str]:
+        """
+        List all available profiles.
+        
+        Returns:
+            List of profile names
+        """
+        profiles = list(self._default_profiles.keys())
+        
+        # Add custom profiles
+        for profile_file in self.profiles_dir.glob("*.json"):
+            profiles.append(profile_file.stem)
+        
+        return sorted(list(set(profiles)))
+    
+    def delete_profile(self, name: str) -> bool:
+        """
+        Delete a profile.
+        
+        Args:
+            name: Profile name
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        # Prevent deletion of default profiles
+        if name in self._default_profiles:
+            logger.warning(f"Cannot delete default profile '{name}'")
+            return False
+        
+        # Check profile file
+        profile_path = self.profiles_dir / f"{name}.json"
+        if profile_path.exists():
+            profile_path.unlink()
+            logger.info(f"Profile '{name}' deleted")
+            return True
+        
+        logger.warning(f"Profile '{name}' not found")
+        return False
+    
+    def duplicate_profile(self, source: str, destination: str) -> bool:
+        """
+        Duplicate a profile.
+        
+        Args:
+            source: Source profile name
+            destination: Destination profile name
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            config = self.load_profile(source)
+            return self.save_profile(destination, config)
+        except Exception as e:
+            logger.error(f"Failed to duplicate profile '{source}' to '{destination}': {e}")
+            return False
+    
+    def export_profile(self, name: str, export_dir: Optional[str] = None) -> bool:
+        """
+        Export a profile to file.
+        
+        Args:
+            name: Profile name
+            export_dir: Export directory (uses profiles_dir if None)
+            
+        Returns:
+            True if successful, False otherwise
+        """
+        if export_dir is None:
+            export_dir = self.profiles_dir
+        
+        export_path = Path(export_dir)
+        export_path.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            config = self.load_profile(name)
+            
+            export_file = export_path / f"{name}.json"
+            with open(export_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            logger.info(f"Profile '{name}' exported to {export_file}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to export profile '{name}': {e}")
+            return False
+    
+    def import_profile(self, import_path: str) -> bool:
+        """
+        Import a profile from file.
+        
+        Args:
+            import_path: Path to profile file
+            
+        Returns:
+            True if successful, False otherwise
+        """
         try:
             import_path = Path(import_path)
+            if not import_path.exists():
+                logger.error(f"Import path does not exist: {import_path}")
+                return False
+            
+            # Load configuration
             with open(import_path, 'r') as f:
-                data = json.load(f)
-            profile = ProfileConfig.from_dict(data)
+                config = json.load(f)
             
-            # Avoid overwriting existing profiles
-            if profile.name in self._profiles:
-                # Add suffix to make unique
-                base_name = profile.name
-                counter = 1
-                while f"{base_name}_{counter}" in self._profiles:
-                    counter += 1
-                profile.name = f"{base_name}_{counter}"
+            # Extract profile name from filename
+            name = import_path.stem
             
-            self._profiles[profile.name] = profile
-            self.save_profile(profile)
+            # Save profile
+            return self.save_profile(name, config)
             
-            return self.config_dir / f"{profile.name}.json"
         except Exception as e:
             logger.error(f"Failed to import profile from {import_path}: {e}")
-            return None
-
-    def delete(self, name: str):
-        """Delete a profile."""
-        if name in DEFAULT_PROFILES:
-            logger.warning(f"Cannot delete built-in profile: {name}")
             return False
+    
+    def get_default_profiles(self) -> List[str]:
+        """
+        Get list of default profile names.
         
-        profile_file = self.config_dir / f"{name}.json"
-        if profile_file.exists():
-            profile_file.unlink()
-            self._profiles.pop(name, None)
-            logger.info(f"Deleted profile: {name}")
-            return True
-        else:
-            logger.warning(f"Profile '{name}' not found for deletion.")
-            return False
-
-    def get_profile(self, name: str) -> Optional[ProfileConfig]:
-        """Get a profile by name."""
-        return self._profiles.get(name)
+        Returns:
+            List of default profile names
+        """
+        return list(self._default_profiles.keys())
     
-    def list_profiles_new(self) -> List[ProfileConfig]:
-        """List all available profiles (new API)."""
-        return list(self._profiles.values())
-    
-    def set_detection_callback(self, callback):
-        """Set callback for application detection."""
-        self._detection_callback = callback
-    
-    def set_profile_change_callback(self, callback):
-        """Set callback when profile changes."""
-        self._profile_change_callback = callback
-    
-    def detect_active_app(self) -> str:
-        """Detect the currently active application."""
-        if self._detection_callback:
-            try:
-                return self._detection_callback()
-            except Exception as e:
-                logger.warning(f"App detection callback failed: {e}")
-        return "unknown"
-    
-    def auto_switch_profile(self):
-        """Automatically switch profile based on active application."""
-        app_name = self.detect_active_app()
-        self._current_app_name = app_name
+    def get_profile_info(self, name: str) -> Dict[str, Any]:
+        """
+        Get information about a profile.
         
-        # Find matching profile
-        best_match = None
-        best_priority = -1
-        
-        for profile in self._profiles.values():
-            if not profile.enabled:
-                continue
-            if profile.source == ProfileSource.GLOBAL:
-                continue  # Global is fallback
+        Args:
+            name: Profile name
             
-            for pattern in profile.auto_detect_patterns:
-                if fnmatch.fnmatch(app_name, pattern):
-                    if profile.priority > best_priority:
-                        best_match = profile
-                        best_priority = profile.priority
+        Returns:
+            Profile information dictionary
+        """
+        config = self.load_profile(name)
         
-        if best_match and best_match != self._current_profile:
-            self._switch_to_profile(best_match)
-        elif not best_match and self._current_profile != self._profiles.get("global"):
-            # Fall back to global
-            self._switch_to_profile(self._profiles.get("global"))
-    
-    def _switch_to_profile(self, profile: ProfileConfig):
-        """Switch to a new profile."""
-        if profile == self._current_profile:
-            return
-        
-        logger.info(f"Switching profile: {self._current_profile.name} -> {profile.name}")
-        self._current_profile = profile
-        
-        if self._profile_change_callback:
-            try:
-                self._profile_change_callback(profile)
-            except Exception as e:
-                logger.error(f"Profile change callback failed: {e}")
-    
-    def manual_switch(self, name: str) -> bool:
-        """Manually switch to a profile by name."""
-        profile = self._profiles.get(name)
-        if not profile:
-            logger.warning(f"Profile not found: {name}")
-            return False
-        self._switch_to_profile(profile)
-        return True
-    
-    def get_current_profile(self) -> ProfileConfig:
-        """Get the currently active profile."""
-        return self._current_profile
-    
-    def get_current_app_name(self) -> str:
-        """Get the currently detected application name."""
-        return self._current_app_name
-    
-    def apply_to_gesture_config(self, gesture_config):
-        """Apply current profile to a GestureConfig object."""
-        if not self._current_profile:
-            return gesture_config
-        
-        profile = self._current_profile
-        # Apply gesture modifications
-        if profile.gesture_pinch_enter_threshold is not None:
-            gesture_config.pinch_enter_threshold = profile.gesture_pinch_enter_threshold
-        if profile.gesture_pinch_confirm_threshold is not None:
-            gesture_config.pinch_confirm_threshold = profile.gesture_pinch_confirm_threshold
-        if profile.gesture_pinch_release_threshold is not None:
-            gesture_config.pinch_release_threshold = profile.gesture_pinch_release_threshold
-        if profile.gesture_scroll_sensitivity is not None:
-            gesture_config.scroll_sensitivity = profile.gesture_scroll_sensitivity
-        if profile.gesture_scroll_cooldown is not None:
-            gesture_config.scroll_cooldown = profile.gesture_scroll_cooldown
-        if profile.gesture_fist_hold_time is not None:
-            gesture_config.fist_hold_time = profile.gesture_fist_hold_time
-        if profile.gesture_drag_hold_time is not None:
-            gesture_config.drag_hold_time = profile.gesture_drag_hold_time
-        if profile.gesture_click_max_duration is not None:
-            gesture_config.click_max_duration = profile.gesture_click_max_duration
-        if profile.gesture_click_max_movement is not None:
-            gesture_config.click_max_movement = profile.gesture_click_max_movement
-        if profile.gesture_gesture_cooldown is not None:
-            gesture_config.gesture_cooldown = profile.gesture_gesture_cooldown
-        if profile.gesture_enable_two_hand is not None:
-            gesture_config.enable_two_hand = profile.gesture_enable_two_hand
-        if profile.gesture_clutch_enabled is not None:
-            gesture_config.clutch_enabled = profile.gesture_clutch_enabled
-        if profile.gesture_clutch_trigger_gesture is not None:
-            gesture_config.clutch_trigger_gesture = profile.gesture_clutch_trigger_gesture
-        if profile.gesture_clutch_timeout is not None:
-            gesture_config.clutch_timeout = profile.gesture_clutch_timeout
-        if profile.gesture_conflict_resolution is not None:
-            gesture_config.conflict_resolution = profile.gesture_conflict_resolution
-        
-        return gesture_config
-    
-    def apply_to_cursor_config(self, cursor_config):
-        """Apply current profile to a CursorConfig object."""
-        if not self._current_profile:
-            return cursor_config
-        
-        profile = self._current_profile
-        # Apply cursor modifications
-        if profile.cursor_sensitivity_mode is not None:
-            from ..control.cursor import SensitivityMode
-            cursor_config.sensitivity_mode = SensitivityMode(profile.cursor_sensitivity_mode)
-        if profile.cursor_base_sensitivity is not None:
-            cursor_config.base_sensitivity = profile.cursor_base_sensitivity
-        if profile.cursor_acceleration is not None:
-            cursor_config.acceleration = profile.cursor_acceleration
-        if profile.cursor_smoothing is not None:
-            from ..control.cursor import SmoothingAlgorithm
-            cursor_config.smoothing = SmoothingAlgorithm(profile.cursor_smoothing)
-        if profile.cursor_dead_zone_radius is not None:
-            cursor_config.dead_zone_radius = profile.cursor_dead_zone_radius
-        if profile.cursor_invert_x is not None:
-            cursor_config.invert_x = profile.cursor_invert_x
-        if profile.cursor_invert_y is not None:
-            cursor_config.invert_y = profile.cursor_invert_y
-        if profile.cursor_use_index_tip is not None:
-            cursor_config.use_index_tip = profile.cursor_use_index_tip
-        if profile.cursor_max_velocity is not None:
-            cursor_config.max_velocity = profile.cursor_max_velocity
-        if profile.cursor_max_velocity_precision is not None:
-            cursor_config.max_velocity_precision = profile.cursor_max_velocity_precision
-        
-        return cursor_config
-    
-    def map_gesture_to_action(self, gesture_type) -> str:
-        """Map a gesture type to an action based on current profile."""
-        if not self._current_profile:
-            return gesture_type.name.lower()
-        
-        profile = self._current_profile
-        mapping = {
-            "LEFT_CLICK": profile.input_left_click_action,
-            "RIGHT_CLICK": profile.input_right_click_action,
-            "MIDDLE_CLICK": profile.input_middle_click_action,
-            "SCROLL_UP": profile.input_scroll_up_action,
-            "SCROLL_DOWN": profile.input_scroll_down_action,
-            "SCROLL_HORIZONTAL": profile.input_scroll_horizontal_action,
-            "DRAG_START": profile.input_drag_action,
-            "PINCH_CONFIRM": profile.input_pinch_confirm_action,
-            "OPEN_PALM": profile.input_open_palm_action,
-            "FIST": profile.input_fist_action,
-            "THUMB_GESTURE": profile.input_thumb_gesture_action,
-            "TWO_HAND_GESTURE": profile.input_two_hand_action,
+        return {
+            "name": name,
+            "version": config.get("version", "unknown"),
+            "author": config.get("author", "unknown"),
+            "created": config.get("created", "unknown"),
+            "modified": config.get("modified", "unknown"),
+            "description": config.get("description", ""),
+            "cursor_sensitivity": config.get("cursor", {}).get("sensitivity_mode", "unknown"),
+            "tracking_mode": "head-relative" if config.get("tracking", {}).get("use_head_relative", False) else "2d",
+            "gestures_enabled": sum([
+                config.get("gestures", {}).get("enable_drag", False),
+                config.get("gestures", {}).get("enable_scroll", False),
+                config.get("gestures", {}).get("enable_palm_control", False),
+                config.get("gestures", {}).get("enable_fist_gesture", False)
+            ])
         }
+    
+    def validate_profile(self, name: str) -> List[str]:
+        """
+        Validate a profile configuration.
         
-        action = mapping.get(gesture_type.name)
-        if action:
-            return action
+        Args:
+            name: Profile name
+            
+        Returns:
+            List of validation errors (empty if valid)
+        """
+        errors = []
         
-        # Check custom actions
-        if gesture_type.name in profile.custom_actions:
-            return profile.custom_actions[gesture_type.name]
+        try:
+            config = self.load_profile(name)
+            self._validate_config(config)
+            
+        except Exception as e:
+            errors.append(str(e))
         
-        return gesture_type.name.lower()
+        return errors
+    
+    def _validate_config(self, config: Dict[str, Any]) -> None:
+        """
+        Validate configuration against schema.
+        
+        Args:
+            config: Configuration dictionary
+            
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        # Check required keys
+        required_keys = ["version", "cursor", "tracking"]
+        for key in required_keys:
+            if key not in config:
+                raise ValueError(f"Missing required configuration key: '{key}'")
+        
+        # Validate schema
+        try:
+            import jsonschema
+            jsonschema.validate(config, CONFIG_SCHEMA)
+        except ImportError:
+            logger.warning("jsonschema not available, skipping schema validation")
+        except Exception as e:
+            raise ValueError(f"Configuration validation error: {e}")
+        
+        # Application-specific validation
+        self._validate_application_rules(config)
+    
+    def _validate_application_rules(self, config: Dict[str, Any]) -> None:
+        """
+        Validate configuration against application rules.
+        
+        Args:
+            config: Configuration dictionary
+        """
+        # Check for incompatible combinations
+        cursor_config = config.get("cursor", {})
+        tracking_config = config.get("tracking", {})
+        gestures_config = config.get("gestures", {})
+        
+        # Check sensitivity mode consistency
+        sensitivity_mode = cursor_config.get("sensitivity_mode", "normal")
+        max_velocity = cursor_config.get("max_velocity", 2000)
+        
+        # Precision mode should have lower max velocity
+        if sensitivity_mode == "precision" and max_velocity > 1000:
+            logger.warning("Precision mode with high max_velocity may cause unstable tracking")
+        
+        # Fast mode should have higher max velocity  
+        if sensitivity_mode == "fast" and max_velocity < 2000:
+            logger.warning("Fast mode with low max_velocity may limit navigation speed")
+        
+        # Check tracking confidence thresholds
+        min_hand_confidence = tracking_config.get("min_hand_confidence", 0.0)
+        min_face_confidence = tracking_config.get("min_face_confidence", 0.0)
+        
+        if min_hand_confidence > 0.8 and min_face_confidence < 0.5:
+            logger.warning("High hand confidence with low face confidence may cause tracking issues")
+        
+        # Check gesture consistency
+        enable_drag = gestures_config.get("enable_drag", False)
+        enable_scroll = gestures_config.get("enable_scroll", False)
+        enable_palm = gestures_config.get("enable_palm_control", False)
+        
+        if not any([enable_drag, enable_scroll, enable_palm]):
+            logger.warning("No gesture types enabled - consider enabling at least one")
+    
+    def _load_profile_from_file(self, file_path: Path) -> Dict[str, Any]:
+        """
+        Load configuration from file.
+        
+        Args:
+            file_path: Path to profile file
+            
+        Returns:
+            Configuration dictionary
+            
+        Raises:
+            ValueError: If file cannot be loaded or is invalid
+        """
+        try:
+            with open(file_path, 'r') as f:
+                config = json.load(f)
+            
+            # Validate configuration
+            self._validate_config(config)
+            
+            logger.info(f"Profile '{file_path.stem}' loaded successfully from {file_path}")
+            return config
+            
+        except Exception as e:
+            logger.error(f"Failed to load profile from {file_path}: {e}")
+            raise ValueError(f"Failed to load profile from {file_path}: {e}")
+    
+    def _create_backup(self, name: str, config: Dict[str, Any]) -> None:
+        """
+        Create backup of configuration profile.
+        
+        Args:
+            name: Profile name
+            config: Configuration dictionary
+        """
+        try:
+            # Generate backup filename with timestamp
+            timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+            backup_filename = f"{name}_{timestamp}.json"
+            
+            backup_path = self.profiles_dir / backup_filename
+            
+            # Add backup metadata
+            config_with_metadata = config.copy()
+            config_with_metadata["backup_timestamp"] = timestamp
+            config_with_metadata["backup_reason"] = "automatic_backup"
+            
+            with open(backup_path, 'w') as f:
+                json.dump(config_with_metadata, f, indent=2)
+            
+            logger.debug(f"Profile '{name}' backed up to {backup_path}")
+            
+        except Exception as e:
+            logger.warning(f"Failed to create backup for profile '{name}': {e}")
+    
+    def __str__(self) -> str:
+        """String representation."""
+        profiles = self.list_profiles()
+        return f"ProfileManager(profiles={len(profiles)}, default={len(self._default_profiles)})"
+    
+    def __repr__(self) -> str:
+        """Developer-friendly representation."""
+        return self.__str__()
+class ProfileInfo:
+    """
+    Profile information data class.
+    
+    Simple container for profile metadata.
+    """
+    
+    def __init__(self, name: str, version: str = "", author: str = "",
+                 description: str = "", created: str = "", modified: str = ""):
+        self.name = name
+        self.version = version
+        self.author = author
+        self.description = description
+        self.created = created
+        self.modified = modified
 
+    def __str__(self) -> str:
+        """String representation."""
+        return f"ProfileInfo(name={self.name}, version={self.version}, author={self.author})"
 
-# Global profile manager instance
-_profile_manager: Optional[ProfileManager] = None
-
-
-def get_profile_manager(config_dir: Optional[Path] = None) -> ProfileManager:
-    """Get or create the global profile manager."""
-    global _profile_manager
-    if _profile_manager is None:
-        _profile_manager = ProfileManager(config_dir)
-    return _profile_manager
-
-
-def reset_profile_manager():
-    """Reset the global profile manager (for testing)."""
-    global _profile_manager
-    _profile_manager = None
-
-
-# Backward compatibility
-ProfileInfo = ProfileConfig
+    def __repr__(self) -> str:
+        """Developer-friendly representation."""
+        return self.__str__()

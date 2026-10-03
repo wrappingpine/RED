@@ -77,6 +77,9 @@ class VirtualMouse:
 
     Provides mouse movement, clicks, and scroll events
     through a kernel-level virtual device.
+
+    Fail-closed design (§10): any write failure marks the device
+    unhealthy, releases pressed buttons, and prevents further input.
     """
 
     def __init__(self, config: Optional[UInputDeviceConfig] = None):
@@ -88,6 +91,10 @@ class VirtualMouse:
         # Virtual cursor position (maintained locally since uinput doesn't expose it)
         self._cursor_x: int = 0
         self._cursor_y: int = 0
+        # §10: Health tracking - device is unhealthy after any write failure
+        self._healthy: bool = True
+        self._write_errors: int = 0
+        self._max_write_errors: int = 3  # Consecutive failures before marking dead
 
     def create(self) -> bool:
         """
@@ -171,10 +178,19 @@ class VirtualMouse:
             raise RuntimeError("Device not open")
         return fcntl.ioctl(self._fd, request, arg)
 
-    def _write_event(self, ev_type: int, code: int, value: int):
-        """Write an input event."""
-        if self._fd is None:
-            return
+    def _write_event(self, ev_type: int, code: int, value: int) -> bool:
+        """
+        Write an input event to the uinput device.
+
+        Returns:
+            True if write succeeded, False if device is unhealthy.
+
+        Fail-closed (§10): write failure marks device unhealthy,
+        releases pressed buttons, and prevents further input.
+        The internal cursor position is NOT advanced on failure.
+        """
+        if not self._healthy or self._fd is None:
+            return False
 
         # struct input_event { timeval time; unsigned short type; unsigned short code; unsigned int value; }
         # Use 0 for timestamp (kernel will fill in)
@@ -184,8 +200,35 @@ class VirtualMouse:
                           ev_type, code, value)
         try:
             os.write(self._fd, event)
+            self._write_errors = 0  # Reset on success
+            return True
         except OSError as e:
-            logger.warning(f"Failed to write event: {e}")
+            self._write_errors += 1
+            logger.error(f"uinput write failed ({self._write_errors}/{self._max_write_errors}): {e}")
+            if self._write_errors >= self._max_write_errors:
+                self._mark_unhealthy()
+            return False
+
+    def _mark_unhealthy(self):
+        """Mark device as unhealthy - release buttons and stop input (§10)."""
+        if self._healthy:
+            self._healthy = False
+            logger.critical("uinput device marked UNHEALTHY - input frozen")
+            # Release any pressed buttons
+            for button in list(self._buttons_pressed):
+                try:
+                    # Direct write for release (best effort)
+                    event = struct.pack("@LLHHi", 0, 0, EV_KEY, button, 0)
+                    os.write(self._fd, event)
+                    event = struct.pack("@LLHHi", 0, 0, EV_SYN, SYN_REPORT, 0)
+                    os.write(self._fd, event)
+                except OSError:
+                    pass
+            self._buttons_pressed.clear()
+
+    def is_healthy(self) -> bool:
+        """Check if the virtual mouse device is healthy."""
+        return self._healthy and self._created
 
     def _sync(self):
         """Send synchronization event."""
@@ -198,14 +241,21 @@ class VirtualMouse:
         Args:
             dx: X movement (positive = right)
             dy: Y movement (positive = down)
+
+        The internal cursor position is only advanced if the write succeeds (§10).
         """
+        success = True
         if dx != 0:
-            self._write_event(EV_REL, REL_X, dx)
-            self._cursor_x += dx
+            if not self._write_event(EV_REL, REL_X, dx):
+                success = False
         if dy != 0:
-            self._write_event(EV_REL, REL_Y, dy)
-            self._cursor_y += dy
+            if not self._write_event(EV_REL, REL_Y, dy):
+                success = False
         self._sync()
+        # Only advance internal cursor position on successful write (§10)
+        if success:
+            self._cursor_x += dx
+            self._cursor_y += dy
 
     def get_position(self) -> tuple:
         """
