@@ -21,6 +21,7 @@
 - **Q:** What noise model and measurement method should SC-004 jitter reduction tests use? (SC-004) → **A:** Stationary hand (zero velocity) + Gaussian noise σ=0.01 normalized coordinates, 1000 frames, measure cursor position std dev <1px (matches quickstart.md Scenario 4).
 - **Q:** What is the exact two-hand precision gesture definition? → **C:** Any two hands detected (with `enable_two_hand=True` and `secondary_hand_precision_mode=True`) triggers precision mode immediately — no specific hand shape or hold duration required. Already implemented in `gestures.py` (line 376-378).
 - **Q:** How should the system handle both face and hand tracking lost simultaneously? → **C:** Cursor freezes at last valid position, stabilization frames reset, log WARNING once per session, await automatic recovery on re-acquisition.
+- **Q:** When face tracking degrades to legacy mode, should cursor snap or smoothly transition? → **B:** Initialize legacy reference point from current screen position — no visible cursor jump during transition.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -124,7 +125,7 @@ The VelocityLimiter receives deltas (dx, dy) but incorrectly treats them as posi
 - **FR-007**: System MUST invert X/Y axes when configured via invert_x/invert_y settings
 - **FR-008**: System MUST clamp cursor to screen boundaries
 - **FR-009**: System MUST log pipeline stage timings for latency measurement as structured JSON with fields: `stage_name` (string), `duration_ms` (float), `timestamp` (ISO 8601), `frame_id` (int). Logs written to `airmouse/debug/diagnostics.py` via non-blocking async handler.
-- **FR-010**: System MUST gracefully degrade to legacy mode when face tracking unavailable. On degradation: log structured WARNING event with tag `face_tracking_lost`, set internal mode flag to legacy, emit SafetyEvent for tray/UI notification. Auto-recover to head-relative mode when face confidence exceeds threshold for 5 consecutive frames.
+- **FR-010**: System MUST gracefully degrade to legacy mode when face tracking unavailable. On degradation: log structured WARNING event with tag `face_tracking_lost`, set internal mode flag to legacy, emit SafetyEvent for tray/UI notification, initialize legacy reference point from current screen position (no visible cursor jump). Auto-recover to head-relative mode when face confidence exceeds threshold for 5 consecutive frames.
 
 ### Key Entities
 
