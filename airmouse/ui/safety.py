@@ -228,6 +228,10 @@ class FocusMonitor:
         self._running = False
         self._target_window_id: Optional[int] = None
         self._x11_display = None
+        # Initialize hand-activity timestamp to "now" so the Wayland
+        # heuristic doesn't fire on startup (idle would otherwise be
+        # now - 0.0 = huge → immediate focus_loss).
+        self._last_hand_activity: float = time.time()
 
         # Try to get our window ID
         self._initialize_x11()
@@ -388,13 +392,19 @@ class FocusMonitor:
         If the hand has been still for longer, we report focus loss so the
         auto-pause can engage (which is the correct behaviour for an
         unattended app).
+
+        The idle threshold is deliberately conservative: we require
+        several times the check interval of inactivity before reporting
+        focus loss, so a momentarily still hand doesn't trigger a false
+        pause.  The default ``focus_check_interval`` is 0.5s, so the
+        minimum idle before focus loss is ~2.5s.
         """
         now = time.time()
-        last_activity = getattr(self, '_last_hand_activity', 0.0)
+        last_activity = getattr(self, '_last_hand_activity', now)
         idle = now - last_activity
-        # If idle for more than 2x the focus check interval, consider it
-        # a potential focus loss.  This is a heuristic, not a certainty.
-        if idle > self._config.focus_check_interval * 2:
+        # Require at least 5× the check interval of inactivity before
+        # reporting focus loss.  This is a heuristic, not a certainty.
+        if idle > self._config.focus_check_interval * 5:
             return False
         return True
 

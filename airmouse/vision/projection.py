@@ -262,12 +262,27 @@ class HandProjector:
         z=distance.  This keeps the cursor responsive when the hand is at
         eye depth or between the eye and the virtual plane, instead of
         freezing.
+
+        The head-space X/Y is clamped to the plane's physical bounds
+        (width/2 × height/2) before converting to camera coords, so the
+        resulting normalized (u, v) is always in [0, 1].  This avoids the
+        situation where the fallback itself produces out-of-bounds values
+        that then get clamped by point_to_normalized — instead the clamp
+        happens here at the geometry level, which is more correct.
         """
         fingertip_head = self.head_coords.camera_to_head(fingertip_cam)
-        # Clamp the head-space point onto the plane surface at z=distance
+
+        # Clamp head-space X/Y to the plane's physical bounds so the
+        # resulting normalized coordinates are always in [0, 1].
+        half_w = self.virtual_plane.width / 2.0
+        half_h = self.virtual_plane.height / 2.0
+        clamped_x = float(np.clip(fingertip_head[0], -half_w, half_w))
+        clamped_y = float(np.clip(fingertip_head[1], -half_h, half_h))
+
+        # Build the head-space point on the plane surface at z=distance
         point_head = np.array([
-            fingertip_head[0],
-            fingertip_head[1],
+            clamped_x,
+            clamped_y,
             self.virtual_plane.distance,
         ], dtype=np.float32)
         point_cam = self.head_coords.head_to_camera(point_head)
@@ -378,11 +393,14 @@ class HandProjector:
 
             if intersection_head is None:
                 # Graceful fallback: ray missed the plane, project fingertip
-                # x/y onto the plane surface at z=distance
+                # x/y onto the plane surface at z=distance.  Clamp to the
+                # plane's physical bounds so normalized coords are in [0,1].
+                half_w = self.virtual_plane.width / 2.0
+                half_h = self.virtual_plane.height / 2.0
+                clamped_x = float(np.clip(fingertip_head[0], -half_w, half_w))
+                clamped_y = float(np.clip(fingertip_head[1], -half_h, half_h))
                 point_head = np.array([
-                    fingertip_head[0],
-                    fingertip_head[1],
-                    self.virtual_plane.distance,
+                    clamped_x, clamped_y, self.virtual_plane.distance,
                 ], dtype=np.float32)
                 normalized = self.virtual_plane.point_to_normalized(hc.head_to_camera(point_head))
                 if normalized is None:
