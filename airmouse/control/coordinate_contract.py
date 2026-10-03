@@ -210,11 +210,11 @@ def contract_compliance_check() -> bool:
         assert 0 <= pixel_x < 1920, f"Invalid pixel x: {pixel_x}"
         assert 0 <= pixel_y < 1080, f"Invalid pixel y: {pixel_y}"
         
-        print("Coordinate Contract validation: PASSED")
+        logger.info("Coordinate Contract validation: PASSED")
         return True
         
     except Exception as e:
-        print(f"Coordinate Contract validation: FAILED - {e}")
+        logger.error(f"Coordinate Contract validation: FAILED - {e}")
         return False
 
 
