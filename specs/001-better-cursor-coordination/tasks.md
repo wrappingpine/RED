@@ -80,7 +80,7 @@
 
 - Phase 4 tests pass (18 projection tests including 2 new degradation tests)
 - Phase 4 implementation complete (T014-T016)
-- All 192 tests pass (up from 190, 2 new tests added)
+- All 200 tests pass (200 passed, 1 skipped)
 
 ---
 
@@ -161,7 +161,7 @@
 - **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
 - **User Stories (Phase 3-7)**: All depend on Foundational phase completion
   - Phase 3 (US1) -> Phase 4 (US2) -> Phase 5 (US3) -> Phase 6 (US4) -> Phase 7 (US5)
-  - Phases 1-4 COMPLETE. Phases 5-7 implementation done (T019-T021, T024-T025, T028-T029). Remaining: write tests for T017-T018, T022-T023, T026-T027.
+  - Phases 1-7 COMPLETE. All implementation and test tasks done (T001-T036).
 - **Polish (Final Phase)**: Depends on all user stories being complete
 
 ### User Story Dependencies
@@ -207,5 +207,5 @@ Task: "Implement fallback unit test in airmouse/tests/test_projection.py verifyi
 4. **DONE**: US3 (smoothing, Phase 5) — One Euro Filter on plane coords implemented (T019-T021)
 5. **DONE**: US4 (reference point, Phase 6) — reference point update logic for both modes implemented (T024-T025)
 6. **DONE**: US5 (velocity limiter, Phase 7) — `VelocityLimiter` class and integration complete (T028-T029)
-7. **TODO**: Write remaining tests: T017-T018 (jitter/smoothing), T022-T023 (reference point), T026-T027 (velocity capping)
+7. **DONE**: All tests written and passing (T017-T018, T022-T023, T026-T027)
 8. Deliver final polish and benchmarks → Release ready!
