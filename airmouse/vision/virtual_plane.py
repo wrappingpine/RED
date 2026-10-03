@@ -8,11 +8,31 @@ to produce normalized cursor coordinates.
 
 import numpy as np
 import logging
+import time
 from dataclasses import dataclass
 from typing import Optional, Tuple, Dict
 from .head_coords import HeadCoordinateSystem
 
 logger = logging.getLogger(__name__)
+
+
+class _RateLimitedLogger:
+    """Rate-limited logger to prevent spam from frequent projection warnings."""
+
+    def __init__(self, min_interval: float = 2.0):
+        self._min_interval = min_interval
+        self._last_log: Dict[str, float] = {}
+
+    def warn(self, key: str, message: str):
+        """Log a warning at most once per min_interval seconds."""
+        now = time.time()
+        last = self._last_log.get(key, 0.0)
+        if now - last >= self._min_interval:
+            logger.warning(message)
+            self._last_log[key] = now
+
+
+_rate_logger = _RateLimitedLogger(min_interval=2.0)
 
 
 @dataclass
@@ -242,11 +262,15 @@ class VirtualDisplayPlane:
 
         # Log structured warning if out of bounds (intersection failure clamped to boundary)
         if u < 0.0 or u > 1.0 or v < 0.0 or v > 1.0:
-            logger.warning(
+            _rate_logger.warn(
+                "projection_intersection_failed",
                 "event=projection_intersection_failed "
                 f"u={u:.3f} v={v:.3f} "
                 "reason=out_of_bounds "
                 "action=clamp_to_boundary"
+            )
+            logger.debug(
+                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - clamping to boundary"
             )
 
         # Clamp to [0, 1]  (coordinate contract level - filters must not clamp)
