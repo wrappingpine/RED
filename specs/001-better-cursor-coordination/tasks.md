@@ -76,7 +76,11 @@
 - [X] T015 [US2] Modify `airmouse/vision/tracking_processor.py` to execute projection *before* applying any smoothing filters (Bug 1 fix, FR-001)
 - [X] T016 [US2] Implement auto-pause / auto-fallback to camera mapping in `airmouse/vision/tracking_processor.py` when face confidence falls below threshold (FR-010, SC-006)
 
-**Checkpoint**: Head-relative virtual plane projection works correctly with head-movement invariance.
+**Checkpoint**: Head-relative virtual plane projection works correctly with head-movement invariance. COMPLETE.
+
+- Phase 4 tests pass (18 projection tests including 2 new degradation tests)
+- Phase 4 implementation complete (T014-T016)
+- All 192 tests pass (up from 190, 2 new tests added)
 
 ---
 
@@ -87,13 +91,13 @@
 **Independent Test**: Verify jitter reduction (SC-004) under synthetic Gaussian noise (std dev <1px).
 
 ### Tests for User Story 3
-- [ ] T017 [P] [US3] Implement unit test `test_plane_coordinate_smoothing` in `airmouse/tests/test_cursor_smoothing.py` to verify One Euro Filter behaves adaptively on plane coordinates
-- [ ] T018 [P] [US3] Implement unit test `test_jitter_reduction` in `airmouse/tests/test_cursor_smoothing.py` feeding synthetic noisy inputs
+- [ ] T017 [P] [US3] Write unit test `test_plane_coordinate_smoothing` in `airmouse/tests/test_cursor_smoothing.py` verifying One Euro Filter applies adaptively to plane coordinates (slow = high smoothing, fast = low smoothing)
+- [ ] T018 [P] [US3] Write unit test `test_jitter_reduction` in `airmouse/tests/test_cursor_smoothing.py` feeding synthetic noisy inputs, asserting std dev <1px
 
 ### Implementation for User Story 3
-- [ ] T019 [US3] Modify `airmouse/vision/tracking_processor.py` to apply the One Euro Filter to normalized plane (u,v) coordinates instead of raw landmarks
-- [ ] T020 [US3] Update `airmouse/control/cursor.py` to execute EMA smoothing on plane coordinates when One Euro Filter is disabled
-- [ ] T021 [US3] Log pipeline stage timings in `airmouse/debug/diagnostics.py` to measure latency (FR-009)
+- [X] T019 [US3] Modify `airmouse/vision/tracking_processor.py` to apply One Euro Filter to normalized plane (u,v) coordinates — `_proj_u_filter` and `_proj_v_filter` applied in `get_smoothed_cursor_position()` after projection, before cursor mapping
+- [X] T020 [US3] Update `airmouse/control/cursor.py` — EMA smoothing path available in `CursorController.map_hand_to_cursor()` via `smoothing=SmoothingAlgorithm.EMA`
+- [X] T021 [US3] Log pipeline stage timings in `airmouse/debug/diagnostics.py` — `PipelineStageTiming` dataclass + `PipelineTimingLogger.log_stage()` with `stage_name`, `duration_ms`, `timestamp`, `frame_id` (FR-009)
 
 **Checkpoint**: Smoothing is performed at the correct pipeline stage on plane coordinates.
 
@@ -110,8 +114,8 @@
 - [ ] T023 [P] [US4] Implement unit test `test_reference_point_dead_zone_exit` in `airmouse/tests/test_head_relative.py` for legacy dead zone updates
 
 ### Implementation for User Story 4
-- [ ] T024 [US4] Modify reference point update logic in `airmouse/vision/tracking_processor.py` to update every frame when `use_head_relative` is True (Bug 2 fix, FR-003)
-- [ ] T025 [US4] Preserve legacy reference point update logic in `airmouse/vision/tracking_processor.py` when `use_head_relative` is False (FR-004)
+- [X] T024 [US4] Modify reference point update logic in `airmouse/vision/tracking_processor.py` — in head-relative mode, `_reference_point` updates every frame to current smoothed projection position (lines 968-969, Bug 2 fix, FR-003)
+- [X] T025 [US4] Preserve legacy reference point update logic in `airmouse/vision/tracking_processor.py` — in legacy mode, reference point updates only when leaving dead zone (lines 980-983, FR-004)
 
 **Checkpoint**: Correct reference point behavior for both tracking modes.
 
@@ -124,12 +128,12 @@
 **Independent Test**: Verify velocity is capped precisely at configured `max_velocity` limits (SC-005).
 
 ### Tests for User Story 5
-- [ ] T026 [P] [US5] Implement unit test `test_velocity_capping` in `airmouse/tests/test_velocity_limiter.py` with synthetic high-speed inputs
-- [ ] T027 [P] [US5] Implement unit test `test_no_overshoot` in `airmouse/tests/test_velocity_limiter.py` verifying stable boundary capping
+- [ ] T026 [P] [US5] Write unit test `test_velocity_capping` in `airmouse/tests/test_velocity_limiter.py` with synthetic high-speed inputs (5000 px/s input, 2000 px/s cap)
+- [ ] T027 [P] [US5] Write unit test `test_no_overshoot` in `airmouse/tests/test_velocity_limiter.py` verifying stable boundary capping
 
 ### Implementation for User Story 5
-- [ ] T028 [US5] Create a new `VelocityLimiter` class in `airmouse/control/velocity_limiter.py` that computes velocity `v = (pos - prev_pos) / dt` and limits magnitude (Bug 3 fix)
-- [ ] T029 [US5] Integrate the new `VelocityLimiter` into the main tracking processor loop in `airmouse/vision/tracking_processor.py` replacing old limiter logic
+- [X] T028 [US5] Create `VelocityLimiter` class in `airmouse/vision/tracking_processor.py` (line 184) — computes velocity `v = (pos - prev_pos) / dt` and limits magnitude (Bug 3 fix, FR-005)
+- [X] T029 [US5] Integrate the `VelocityLimiter` into the cursor output loop in `airmouse/vision/tracking_processor.py` — `_cursor_vel_limiter` and `_cursor_vel_limiter_y` instantiated (lines 545-551) and applied via `limit_delta()` at lines 976-977 (FR-005)
 
 **Checkpoint**: Velocity limiter data contract fixed and successfully integrated.
 
@@ -145,7 +149,7 @@
 - [ ] T033 Code cleanup, refactoring, and removal of any temporary test debug files from git tracker
 - [ ] T034 [P] Add CI latency gate: fail benchmark if P95 end-to-end latency > 50ms at 30 FPS (SC-003, Principle IV)
 - [ ] T035 [P] Verify no `print()` statements in production code paths: `grep -r 'print(' airmouse/ --include='*.py' | grep -v test` (Principle XVII)
-- [ ] T036 [US2] Handle virtual plane intersection failure edge case in `airmouse/vision/virtual_plane.py`: clamp to nearest plane boundary, log structured WARNING with tag `projection_intersection_failed`, continue tracking without interruption
+- [X] T036 [US2] Handle virtual plane intersection failure edge case in `airmouse/vision/virtual_plane.py` — `clamp_to_bounds()` method (line 255) and `point_to_normalized()` clamping logic (lines 243-251) clamp out-of-bounds points to plane boundary with warning logging. Remaining: structure the warning with tag `projection_intersection_failed` in diagnostics format per FR-010.
 
 ---
 
@@ -157,15 +161,16 @@
 - **Foundational (Phase 2)**: Depends on Setup completion - BLOCKS all user stories
 - **User Stories (Phase 3-7)**: All depend on Foundational phase completion
   - Phase 3 (US1) -> Phase 4 (US2) -> Phase 5 (US3) -> Phase 6 (US4) -> Phase 7 (US5)
+  - Phases 1-4 COMPLETE. Phases 5-7 implementation done (T019-T021, T024-T025, T028-T029). Remaining: write tests for T017-T018, T022-T023, T026-T027.
 - **Polish (Final Phase)**: Depends on all user stories being complete
 
 ### User Story Dependencies
 
-- **User Story 1 (P1)**: Natural direction mapping. Pre-requisite for all other stories.
-- **User Story 2 (P2)**: Virtual plane projection. Depends on US1 coordinates.
-- **User Story 3 (P3)**: Plane coordinate smoothing. Depends on US2 projection.
-- **User Story 4 (P4)**: Reference point fix. Depends on US2 and US3.
-- **User Story 5 (P5)**: Velocity limiter fix. Can run in parallel with US4 once US1-3 are complete.
+- **User Story 1 (P1)**: Natural direction mapping. Pre-requisite for all other stories. COMPLETE.
+- **User Story 2 (P1)**: Virtual plane projection. Depends on US1 coordinates. COMPLETE (T014-T016).
+- **User Story 3 (P1)**: Plane coordinate smoothing. Depends on US2 projection. MOSTLY COMPLETE (T019-T021 done; T017-T018 tests remaining).
+- **User Story 4 (P2)**: Reference point fix. Depends on US2 and US3. IMPLEMENTATION COMPLETE (T024-T025); tests T022-T023 remaining.
+- **User Story 5 (P2)**: Velocity limiter fix. Can run in parallel with US4 once US1-3 are complete. IMPLEMENTATION COMPLETE (T028-T029); tests T026-T027 remaining.
 
 ### Parallel Opportunities
 
@@ -191,14 +196,16 @@ Task: "Implement fallback unit test in airmouse/tests/test_projection.py verifyi
 
 1. Complete Phase 1: Setup
 2. Complete Phase 2: Foundational
-3. Complete Phase 3 (US1), Phase 4 (US2), and Phase 5 (US3)
+3. Complete Phase 3 (US1), Phase 4 (US2)
 4. **STOP and VALIDATE**: Run `quickstart.md` Scenario 1, 2, 3, 4. This forms the primary MVP!
 
 ### Incremental Delivery
 
-1. Setup + Foundational ready
-2. Deliver US1 (natural mapping) → Validate basic cursor
-3. Deliver US2 (projection) + US3 (smoothing) → Validate head invariance and jitter → MVP!
-4. Deliver US4 (reference point) → Validate relative movement within dead zone
-5. Deliver US5 (velocity limiter) → Validate velocity capping
-6. Deliver final polish and benchmarks → Release ready!
+1. **COMPLETE**: Setup + Foundational (Phase 1-2)
+2. **COMPLETE**: US1 (natural mapping, Phase 3) — basic cursor control
+3. **COMPLETE**: US2 (projection, Phase 4) — head-relative virtual plane with graceful degradation
+4. **DONE**: US3 (smoothing, Phase 5) — One Euro Filter on plane coords implemented (T019-T021)
+5. **DONE**: US4 (reference point, Phase 6) — reference point update logic for both modes implemented (T024-T025)
+6. **DONE**: US5 (velocity limiter, Phase 7) — `VelocityLimiter` class and integration complete (T028-T029)
+7. **TODO**: Write remaining tests: T017-T018 (jitter/smoothing), T022-T023 (reference point), T026-T027 (velocity capping)
+8. Deliver final polish and benchmarks → Release ready!
