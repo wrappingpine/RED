@@ -40,6 +40,11 @@ from airmouse.utils.error_logging import get_error_logger
 
 logger = logging.getLogger(__name__)
 
+# Debug mode configuration
+DEBUG_MODE = False
+DEBUG_INTERVAL = 30  # Log every N frames
+DEBUG_LOG_LEVEL = logging.DEBUG
+
 
 @dataclass
 class FrameData:
@@ -960,6 +965,10 @@ class AirMouseController:
         """Process a single frame through the pipeline with coordination."""
         self._last_frame = frame_data.frame
 
+        # Debug dump at intervals (spec: full pipeline observability on demand)
+        if DEBUG_MODE and self._frame_count % DEBUG_INTERVAL == 0:
+            self._debug_dump_pipeline(frame_data)
+
         # Hand detection
         hand_start = time.time()
         hands = self.hand_tracker.process(frame_data.frame)
@@ -990,6 +999,14 @@ class AirMouseController:
         self.stats.cursor_time_ms = tracking_time
         self._frame_coord.record_stage_latency(frame_data, 'tracking', tracking_time)
         self.performance_monitor.update_tracking(tracking_time)
+
+        # Update tracking confidence FIRST — before any early-return branches.
+        # This ensures the confidence state machine always advances, even
+        # when projection fails.  Without this, confidence stays stale and
+        # the state machine gets stuck (e.g., STABILIZING forever).
+        if hands:
+            max_conf = max((h.confidence for h in hands), default=0.0)
+            self._tracking_status.confidence.update(max_conf, frame_count=self._frame_count)
 
         if not tracking_result or tracking_result.tracking_state == TrackingState.NO_HAND:
             # No valid tracked hand - release all buttons and freeze
@@ -1071,10 +1088,15 @@ class AirMouseController:
                     f"confidence={max_conf:.2f}")
             elif self._consecutive_projection_failures >= max_failures:
                 # Sustained projection failure — hand may be outside plane
-                self._tracking_status.record_hand_lost(
-                    LostReason.TRACKING_JUMP,
-                    f"projection_failed_sustained confidence={max_conf:.2f} "
-                    f"frames={self._consecutive_projection_failures}")
+                # Use TEMPORARY_LOSS instead of TRACKING_JUMP to avoid
+                # permanent freeze.  The state machine will recover when
+                # confidence returns to acceptable levels.
+                self._tracking_status.phase = TrackingPhase.TEMPORARY_LOSS
+                logger.info(
+                    f"TRACKING_TEMPORARY_LOSS: frame={self._frame_count} "
+                    f"confidence={max_conf:.2f} "
+                    f"consecutive_failures={self._consecutive_projection_failures}/{max_failures} "
+                    f"action=hold_position")
             else:
                 # Brief projection failure — hold position, do NOT freeze
                 logger.debug(
@@ -1082,6 +1104,11 @@ class AirMouseController:
                     f"confidence={max_conf:.2f} "
                     f"consecutive_failures={self._consecutive_projection_failures}/{max_failures} "
                     f"action=hold_position")
+
+            # CRITICAL: Always call update() so the state machine advances
+            # (stabilization_frames counter, reacquisition timers, etc.)
+            # This prevents the permanent STABILIZING ping-pong loop.
+            self._tracking_status.update()
 
             frame_data.tracking_state = TrackingState.LOST_TRACK
             return
@@ -1223,6 +1250,35 @@ class AirMouseController:
             cursor_velocity=rel_movement if rel_movement else (0, 0)
         )
 
+    def _debug_dump_pipeline(self, frame_data: FrameData):
+        """Dump full pipeline state for debugging at intervals.
+        
+        Spec: Full pipeline observability on demand, rate-limited to DEBUG_INTERVAL
+        to avoid log spam on low-spec laptops.
+        """
+        logger.log(DEBUG_LOG_LEVEL, "=== PIPELINE DEBUG DUMP ===")
+        logger.log(DEBUG_LOG_LEVEL, f"frame_id={self._frame_count}")
+        logger.log(DEBUG_LOG_LEVEL, f"phase={self._tracking_status.phase.name}")
+        logger.log(DEBUG_LOG_LEVEL, f"conf_state={self._tracking_status.confidence.state.name}")
+        logger.log(DEBUG_LOG_LEVEL, f"hands={len(frame_data.hands) if frame_data.hands else 0}")
+        logger.log(DEBUG_LOG_LEVEL, f"tracking_state={frame_data.tracking_state}")
+        if frame_data.hands:
+            for h in frame_data.hands:
+                logger.log(DEBUG_LOG_LEVEL,
+                    f"  hand: id={h.id} conf={h.confidence:.2f} "
+                    f"pos=({h.x:.3f},{h.y:.3f},{h.z:.3f})")
+        if frame_data.primary_hand:
+            ph = frame_data.primary_hand
+            logger.log(DEBUG_LOG_LEVEL,
+                f"  primary: id={ph.id} conf={ph.confidence:.2f} "
+                f"screen=({ph.screen_x:.0f},{ph.screen_y:.0f})")
+        logger.log(DEBUG_LOG_LEVEL,
+            f"latency_ms: hand={self.stats.hand_detection_time_ms:.1f} "
+            f"tracking={self.stats.cursor_time_ms:.1f} "
+            f"gesture={self.stats.gesture_time_ms:.1f} "
+            f"mouse={self.stats.mouse_time_ms:.1f}")
+        logger.log(DEBUG_LOG_LEVEL, "=== END DEBUG DUMP ===")
+
     def _handle_frame_output(self, frame_data: FrameData):
         """Handle output for processed frame (GUI callbacks)."""
         # Emit frame to GUI for preview
@@ -1331,6 +1387,8 @@ class AirMouseController:
                 reason = "tracking_lost"
             elif self._tracking_status.phase == TrackingPhase.STARTING:
                 reason = "tracking_starting"
+            elif self._tracking_status.phase == TrackingPhase.TEMPORARY_LOSS:
+                reason = "tracking_temporary_loss"
             elif self._tracking_status.phase == TrackingPhase.REACQUIRING:
                 reason = "tracking_reacquiring"
             elif self._tracking_status.phase == TrackingPhase.STABILIZING:
@@ -1521,6 +1579,10 @@ class AirMouseController:
 
         # Check tracking status
         if self._tracking_status.phase == TrackingPhase.LOST:
+            return False
+
+        # TEMPORARY_LOSS: hold position, block all input
+        if self._tracking_status.phase == TrackingPhase.TEMPORARY_LOSS:
             return False
 
         # Check if we have any valid tracking state

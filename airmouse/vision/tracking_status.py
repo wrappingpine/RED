@@ -48,6 +48,7 @@ class TrackingPhase(Enum):
     LOST = auto()          # Hand lost - freeze everything
     REACQUIRING = auto()  # Hand detected but not yet stable
     STABILIZING = auto()   # Post-reacquisition stabilization
+    TEMPORARY_LOSS = auto()  # Brief projection failure - hold position
 
 
 class LostReason(Enum):
@@ -283,6 +284,7 @@ class TrackingStatus:
 
         Per spec §17: NO movement when LOST.
         Per spec §18: NO movement during REACQUIRING or STABILIZING.
+        TEMPORARY_LOSS: NO movement (hold position), gestures also blocked.
         """
         if self.phase == TrackingPhase.LOST:
             return False
@@ -292,6 +294,8 @@ class TrackingStatus:
             return False
         if self.phase == TrackingPhase.STABILIZING:
             return False
+        if self.phase == TrackingPhase.TEMPORARY_LOSS:
+            return False  # Hold position during projection failures
         if self.confidence.state == ConfidenceState.LOST:
             return False
         return True
@@ -302,6 +306,7 @@ class TrackingStatus:
 
         Per spec §17: NO gestures when LOST.
         Per spec §18: NO gestures during REACQUIRING or STABILIZING.
+        TEMPORARY_LOSS: NO gestures (hold position, block all interaction).
         """
         if self.phase == TrackingPhase.LOST:
             return False
@@ -311,6 +316,8 @@ class TrackingStatus:
             return False
         if self.phase == TrackingPhase.STABILIZING:
             return False
+        if self.phase == TrackingPhase.TEMPORARY_LOSS:
+            return False  # Block gestures during temporary loss
         if self.confidence.state == ConfidenceState.LOST:
             return False
         if self.confidence.state == ConfidenceState.LOW:
@@ -373,16 +380,40 @@ class TrackingStatus:
             
             logger.debug(f"STABILIZING: frame {self.stabilization_frames}/{target}")
             
-            # Check if confidence dropped during stabilization
-            if self.confidence.state in (ConfidenceState.LOW, ConfidenceState.LOST):
-                logger.warning(f"STABILIZING -> LOST: confidence dropped to {self.confidence.state.name}")
-                self.record_hand_lost(LostReason.CONFIDENCE_DROP, "confidence dropped during stabilization")
+            # Only go back to LOST if confidence is LOST (not LOW).
+            # LOW confidence means the hand is still visible, just with
+            # lower confidence.  Going back to LOST on LOW creates a
+            # ping-pong loop: LOST → REACQUIRING → STABILIZING → LOST.
+            # Instead, continue stabilizing with LOW confidence.
+            if self.confidence.state == ConfidenceState.LOST:
+                logger.warning(f"STABILIZING -> LOST: confidence dropped to LOST")
+                self.record_hand_lost(LostReason.CONFIDENCE_DROP, "confidence dropped to LOST during stabilization")
             elif self.stabilization_frames >= target:
                 self.record_motion_baseline_established()
         
+        elif self.phase == TrackingPhase.TEMPORARY_LOSS:
+            # Brief projection failure - hold position
+            # Recovery: if confidence is acceptable, return to TRACKING
+            # IMPORTANT: TEMPORARY_LOSS recovers DIRECTLY to TRACKING,
+            # NOT through STABILIZING.  This is the key fix for the
+            # permanent ping-pong loop.  A projection failure (hand
+            # visible, ray outside plane) is NOT a tracking loss — the
+            # hand is still tracked, only the cursor position is invalid.
+            if self.confidence.state in (ConfidenceState.HIGH, ConfidenceState.MEDIUM):
+                self.phase = TrackingPhase.TRACKING
+                self.frames_since_loss = 0
+                logger.info(f"TEMPORARY_LOSS -> TRACKING: confidence recovered ({self.confidence.state.name})")
+                if self._on_phase_change:
+                    try:
+                        self._on_phase_change(TrackingPhase.TEMPORARY_LOSS, self.phase)
+                    except Exception as e:
+                        logger.error(f"Error in phase_change callback: {e}")
+            elif self.confidence.state == ConfidenceState.LOST:
+                self.record_hand_lost(LostReason.CONFIDENCE_DROP, "confidence dropped during temporary loss")
+        
         # Cleanup old state
         if self.confidence.state == ConfidenceState.LOST:
-            if self.phase != TrackingPhase.LOST and self.phase != TrackingPhase.REACQUIRING:
+            if self.phase not in (TrackingPhase.LOST, TrackingPhase.REACQUIRING):
                 self.record_hand_lost(LostReason.CONFIDENCE_DROP, "confidence_below_threshold")
     
     def reset(self) -> None:

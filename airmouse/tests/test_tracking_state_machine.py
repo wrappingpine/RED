@@ -65,13 +65,33 @@ class TestTrackingStateMachineRecovery:
         assert status.phase == TrackingPhase.STABILIZING
         assert status.stabilization_frames == 0
 
-    def test_stabilizing_reverts_to_lost_on_low_confidence(self):
-        """STABILIZING phase with low confidence reverts to LOST."""
+    def test_stabilizing_continues_with_low_confidence(self):
+        """STABILIZING phase with LOW confidence continues (does NOT revert to LOST).
+
+        LOW confidence means the hand is still visible, just with lower
+        confidence.  Reverting to LOST on LOW creates a ping-pong loop:
+        LOST → REACQUIRING → STABILIZING → LOST.  Instead, continue
+        stabilizing with LOW confidence.
+        """
         status = TrackingStatus()
         status.phase = TrackingPhase.STABILIZING
         status.stabilization_frames = 2
         status.confidence.state = ConfidenceState.LOW
         status.confidence.confidence_value = 0.2
+
+        status.update()
+
+        # LOW confidence should NOT revert to LOST — continue stabilizing
+        assert status.phase == TrackingPhase.STABILIZING
+        assert status.stabilization_frames == 3
+
+    def test_stabilizing_reverts_to_lost_on_lost_confidence(self):
+        """STABILIZING phase with LOST confidence reverts to LOST."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.STABILIZING
+        status.stabilization_frames = 2
+        status.confidence.state = ConfidenceState.LOST
+        status.confidence.confidence_value = 0.05
 
         status.update()
 
@@ -200,6 +220,114 @@ class TestTrackingStateMachineRecovery:
             status.update()
         assert status.phase == TrackingPhase.TRACKING
         assert status.get_movement_permission() is True
+
+
+class TestTemporaryLossRecovery:
+    """Tests for TEMPORARY_LOSS phase — brief projection failures."""
+
+    def test_temporary_loss_phase_blocks_movement(self):
+        """TEMPORARY_LOSS should hold position (no movement)."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.9, frame_count=1)
+        assert status.get_movement_permission() is False
+
+    def test_temporary_loss_phase_blocks_gesture(self):
+        """TEMPORARY_LOSS should block gestures."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.9, frame_count=1)
+        assert status.get_gesture_permission() is False
+
+    def test_temporary_loss_recovers_to_tracking(self):
+        """TEMPORARY_LOSS should recover to TRACKING when confidence is acceptable."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.9, frame_count=1)
+        status.update()
+        assert status.phase == TrackingPhase.TRACKING
+        assert status.get_movement_permission() is True
+
+    def test_temporary_loss_medium_confidence_recovers(self):
+        """TEMPORARY_LOSS should recover with MEDIUM confidence."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.6, frame_count=1)
+        status.update()
+        assert status.phase == TrackingPhase.TRACKING
+
+    def test_temporary_loss_low_confidence_stays(self):
+        """TEMPORARY_LOSS should NOT recover with LOW confidence."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.4, frame_count=1)
+        status.update()
+        # LOW confidence during TEMPORARY_LOSS — should stay in TEMPORARY_LOSS
+        # (not transition to LOST because confidence is still above LOST threshold)
+        assert status.phase == TrackingPhase.TEMPORARY_LOSS
+
+    def test_temporary_loss_lost_confidence_transitions_to_lost(self):
+        """TEMPORARY_LOSS with LOST confidence should transition to LOST."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.05, frame_count=1)
+        status.update()
+        assert status.phase == TrackingPhase.LOST
+
+    def test_temporary_loss_does_not_increment_stabilization(self):
+        """TEMPORARY_LOSS should not affect stabilization_frames."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.9, frame_count=1)
+        status.stabilization_frames = 5
+        status.update()
+        assert status.stabilization_frames == 5  # unchanged
+
+    def test_temporary_loss_phase_change_callback(self):
+        """TEMPORARY_LOSS -> TRACKING should fire phase change callback."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.9, frame_count=1)
+        changes = []
+        status.set_callbacks(on_phase_change=lambda old, new: changes.append((old, new)))
+        status.update()
+        assert len(changes) == 1
+        assert changes[0] == (TrackingPhase.TEMPORARY_LOSS, TrackingPhase.TRACKING)
+
+
+class TestMainLoopStateMachineIntegration:
+    """Integration tests for main_loop state machine with TEMPORARY_LOSS."""
+
+    def test_lost_track_does_not_call_record_hand_lost(self):
+        """LOST_TRACK with high confidence should NOT call record_hand_lost."""
+        status = TrackingStatus()
+        status.record_hand_lost(LostReason.TRACKING_JUMP, "test")
+        # Simulate what main_loop does: set phase to TEMPORARY_LOSS
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.confidence.update(0.9, frame_count=1)
+        status.update()
+        # Should have recovered to TRACKING
+        assert status.phase == TrackingPhase.TRACKING
+
+    def test_lost_track_with_low_confidence_calls_record_hand_lost(self):
+        """LOST_TRACK with low confidence SHOULD call record_hand_lost."""
+        status = TrackingStatus()
+        status.confidence.update(0.1, frame_count=1)
+        status.record_hand_lost(LostReason.CONFIDENCE_DROP, "test")
+        assert status.phase == TrackingPhase.LOST
+
+    def test_lost_track_sustained_failure_uses_temporary_loss(self):
+        """Sustained projection failure should use TEMPORARY_LOSS, not LOST."""
+        status = TrackingStatus()
+        status.phase = TrackingPhase.TRACKING
+        status.confidence.update(0.9, frame_count=1)
+        # Simulate sustained projection failure
+        status.phase = TrackingPhase.TEMPORARY_LOSS
+        status.update()
+        # Should NOT be in LOST
+        assert status.phase != TrackingPhase.LOST
+        # Should recover when confidence is acceptable
+        assert status.phase == TrackingPhase.TRACKING
 
 
 if __name__ == "__main__":

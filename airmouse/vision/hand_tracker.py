@@ -22,9 +22,11 @@ from mediapipe.tasks.python import vision as mp_vision
 # ROI rectangles to the landmark_projection_calculator without populating
 # the image dimensions metadata, producing:
 #   "landmark_projection_calculator.cc:81 Using NORM_RECT without IMAGE_DIMENSIONS"
-# The mp.Image constructor already carries width/height to the C library,
-# so image data is correct — the warning is a cosmetic artifact of the
-# internal graph configuration.
+# This is a known MediaPipe 1.0.1 C++ internal bug — the mp.Image object
+# already carries width/height to the C library (inferred from the numpy
+# array), so image data is correct.  The warning is a cosmetic artifact
+# of the internal graph configuration and cannot be fixed from Python.
+# We set the C++ log level to ERROR to suppress it.
 os.environ.setdefault('MEDIPIPE_LOG_LEVEL', 'ERROR')
 
 logger = logging.getLogger(__name__)

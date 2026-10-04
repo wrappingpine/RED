@@ -409,7 +409,15 @@ class TrackedHand:
             cache[i].z = lm.z
             cache[i].visibility = lm.visibility
 
-        # Check for large jumps (outlier rejection) on RAW landmarks - skip during stabilization
+        # Jump detection: log but DO NOT reject.  The VelocityLimiter in the
+        # cursor pipeline (applied to the projected u/v coordinates) already
+        # smooths out sudden movements.  Rejecting a frame here creates a
+        # ping-pong loop: jump → lost → reacquire → stabilize → jump again.
+        # Instead, we accept the new landmarks and let the velocity limiter
+        # handle the smoothing.
+        #
+        # Only reject truly impossible jumps (> 0.5 normalized units in one
+        # frame — physically impossible for a hand at normal distance).
         if self.smoothed_landmarks and config.max_landmark_jump > 0 and self.frame_count >= config.stabilization_frames:
             for idx in self.KEY_LANDMARKS:
                 if idx < 21:
@@ -419,18 +427,31 @@ class TrackedHand:
 
                     # Use different thresholds: wrist can move more than fingertips
                     threshold = config.max_wrist_jump if idx == 0 else config.max_landmark_jump
-                    if jump > threshold:
+
+                    # Only reject truly impossible jumps (> 0.5 normalized units)
+                    # which indicate a tracking error, not a real hand movement.
+                    # Normal hand movement produces jumps well below this threshold.
+                    if jump > 0.5:
                         logger.warning(
-                            f"TRACKING_JUMP_DETECTED: frame={self.frame_count} "
+                            f"TRACKING_JUMP_REJECTED: frame={self.frame_count} "
+                            f"landmark={idx}({HandLandmark(idx).name}) "
+                            f"jump={jump:.4f} > threshold=0.5 "
+                            f"old=({old_lm.x:.4f},{old_lm.y:.4f}) "
+                            f"new=({new_lm.x:.4f},{new_lm.y:.4f}) "
+                            f"confidence={new_hand.confidence:.3f}"
+                        )
+                        self.lost_frames += 1
+                        return False
+                    elif jump > threshold:
+                        # Log but accept — let velocity limiter smooth it
+                        logger.debug(
+                            f"TRACKING_JUMP_ACCEPTED: frame={self.frame_count} "
                             f"landmark={idx}({HandLandmark(idx).name}) "
                             f"jump={jump:.4f} > threshold={threshold:.4f} "
                             f"old=({old_lm.x:.4f},{old_lm.y:.4f}) "
                             f"new=({new_lm.x:.4f},{new_lm.y:.4f}) "
                             f"confidence={new_hand.confidence:.3f}"
                         )
-                        if config.reset_on_large_jump:
-                            self.lost_frames += 1
-                            return False
 
         # Check hand center jump on RAW landmarks - skip during stabilization
         if self.smoothed_landmarks and config.max_hand_center_jump > 0 and self.frame_count >= config.stabilization_frames:
@@ -438,17 +459,24 @@ class TrackedHand:
             new_center = self._get_palm_center(cache)
             if old_center and new_center:
                 jump = math.sqrt((new_center.x - old_center.x)**2 + (new_center.y - old_center.y)**2)
-                if jump > config.max_hand_center_jump:
+                if jump > 0.5:
                     logger.warning(
-                        f"TRACKING_JUMP_DETECTED: frame={self.frame_count} "
+                        f"TRACKING_JUMP_REJECTED: frame={self.frame_count} "
+                        f"hand_center jump={jump:.4f} > threshold=0.5 "
+                        f"old=({old_center.x:.4f},{old_center.y:.4f}) "
+                        f"new=({new_center.x:.4f},{new_center.y:.4f}) "
+                        f"confidence={new_hand.confidence:.3f}"
+                    )
+                    self.lost_frames += 1
+                    return False
+                elif jump > config.max_hand_center_jump:
+                    logger.debug(
+                        f"TRACKING_JUMP_ACCEPTED: frame={self.frame_count} "
                         f"hand_center jump={jump:.4f} > threshold={config.max_hand_center_jump:.4f} "
                         f"old=({old_center.x:.4f},{old_center.y:.4f}) "
                         f"new=({new_center.x:.4f},{new_center.y:.4f}) "
                         f"confidence={new_hand.confidence:.3f}"
                     )
-                    if config.reset_on_large_jump:
-                        self.lost_frames += 1
-                        return False
 
         # All checks passed - commit landmarks (swap references)
         self.smoothed_landmarks, cache = cache, self.smoothed_landmarks
