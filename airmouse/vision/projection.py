@@ -190,21 +190,59 @@ class HandProjector:
         fingertip_cam: np.ndarray,
         ray_direction_cam: np.ndarray
     ) -> ProjectionResult:
-        """Project using head coordinate system for accuracy."""
+        """Project using head coordinate system for accuracy.
+
+        Ray direction is derived from the image-plane (X/Y) angular offset
+        between the eye midpoint and the fingertip, with a forced forward
+        Z component.  This is necessary because MediaPipe hand-landmark
+        Z values are *relative* depth estimates, not absolute distances:
+        using them directly in the ray direction places the fingertip
+        behind the eye in head space, producing a backward-pointing ray
+        that can never reach the virtual plane at z=+distance.
+
+        The image-plane X/Y encodes the angular direction of the fingertip
+        relative to the eye midpoint, which is exactly the information we
+        need.  We force the Z component to +1 (forward in head coords) so
+        the ray always points toward the virtual plane, then solve for the
+        intersection distance t.
+        """
         # Transform eye midpoint and fingertip to head coordinates
         eye_midpoint_head = self.head_coords.camera_to_head(eye_midpoint_cam)
         fingertip_head = self.head_coords.camera_to_head(fingertip_cam)
 
-        # Ray in head coordinates: from eye midpoint through fingertip
-        ray_direction_head = fingertip_head - eye_midpoint_head
+        # Compute angular offset in head-space X/Y (image-plane direction).
+        # These two components encode *where on the image plane* the
+        # fingertip sits relative to the eye midpoint — the true direction
+        # we want for the ray.  The Z component is discarded because it is
+        # an unreliable relative-depth estimate from MediaPipe.
+        dx = fingertip_head[0] - eye_midpoint_head[0]
+        dy = fingertip_head[1] - eye_midpoint_head[1]
+
+        # Build the ray direction using the plane distance as the forward
+        # (Z) component.  This places the ray-plane intersection exactly at
+        # the fingertip's head-space (X, Y) on the plane surface at
+        # z=+distance, giving a clean 1:1 mapping between the image-plane
+        # position of the fingertip and the normalized cursor coordinates.
+        #
+        # Using plane_distance (rather than a unit Z=1) means the
+        # intersection point is (dx, dy, distance) in head coords — the
+        # fingertip's angular position projected straight forward onto the
+        # plane.  This is the standard HMD pointing model and preserves
+        # head-movement invariance: when the head rotates but the hand stays
+        # fixed relative to the head, (dx, dy) is unchanged, so the
+        # intersection and the normalized (u, v) are unchanged too.
+        ray_direction_head = np.array(
+            [dx, dy, self.virtual_plane.distance], dtype=np.float32
+        )
         ray_norm = np.linalg.norm(ray_direction_head)
 
         if ray_norm < 1e-6:
-            self._failed_count += 1
-            return ProjectionResult(
-                valid=False,
-                error_message="Ray direction too small in head coordinates"
+            # Fingertip is exactly at the eye midpoint in image-plane
+            # projection — use a straight-forward ray.
+            ray_direction_head = np.array(
+                [0.0, 0.0, self.virtual_plane.distance], dtype=np.float32
             )
+            ray_norm = self.virtual_plane.distance
 
         ray_direction_head = ray_direction_head / ray_norm
 
@@ -386,8 +424,20 @@ class HandProjector:
         if self.use_head_coords_for_ray:
             eye_head = hc.camera_to_head(eye_cam)
             fingertip_head = hc.camera_to_head(fingertip_cam)
-            ray_dir_head = fingertip_head - eye_head
-            ray_dir_head = ray_dir_head / np.linalg.norm(ray_dir_head)
+            # Use image-plane X/Y for the ray direction with the plane
+            # distance as the forward Z (see _project_in_head_coords).
+            dx = fingertip_head[0] - eye_head[0]
+            dy = fingertip_head[1] - eye_head[1]
+            ray_dir_head = np.array(
+                [dx, dy, self.virtual_plane.distance], dtype=np.float32
+            )
+            ray_norm = np.linalg.norm(ray_dir_head)
+            if ray_norm < 1e-6:
+                ray_dir_head = np.array(
+                    [0.0, 0.0, self.virtual_plane.distance], dtype=np.float32
+                )
+                ray_norm = self.virtual_plane.distance
+            ray_dir_head = ray_dir_head / ray_norm
 
             intersection_head = self.virtual_plane.ray_plane_intersection_head(eye_head, ray_dir_head)
 
