@@ -329,13 +329,15 @@ class FaceTracker:
         # Convert BGR to RGB
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-        # Create MediaPipe Image
-        h, w = rgb_frame.shape[:2]
+        # Create MediaPipe Image.  MediaPipe 1.0.x infers width/height
+        # from the numpy array, so no explicit dimensions are needed.
+        # (Older builds exposed an ``image_dimensions`` attribute that
+        # does not exist in 1.0.1; assigning to it silently no-ops and
+        # the calculator emits "NORM_RECT without IMAGE_DIMENSIONS".)
         mp_image = mp.Image(
             image_format=mp.ImageFormat.SRGB,
             data=rgb_frame
         )
-        mp_image.image_dimensions = (w, h)
 
         # Detect faces in VIDEO mode
         self._timestamp_ms += 33  # ~30 FPS

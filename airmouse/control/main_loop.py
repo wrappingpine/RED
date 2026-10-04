@@ -1444,14 +1444,25 @@ class AirMouseController:
         if self._safety_manager:
             # Feed the Wayland focus monitor with hand-activity so the
             # heuristic has something to work with when X11 is unavailable.
-            # Only record activity when the cursor actually moved — a
-            # stationary hand should NOT reset the idle timer, otherwise
-            # the focus heuristic never fires on Wayland.
+            # Record activity whenever a hand is detected (regardless of
+            # whether the cursor moved) — a present hand means the user is
+            # engaged.  Only recording activity on cursor movement let the
+            # idle timer expire whenever the geometry pipeline produced a
+            # zero-delta frame (e.g. during projection fallback or at
+            # startup), causing spurious focus_loss pauses.
             if hasattr(self._safety_manager, '_focus_monitor') and self._safety_manager._focus_monitor:
                 fm = self._safety_manager._focus_monitor
                 if hasattr(fm, 'record_hand_activity'):
-                    # Check if the cursor moved this frame
-                    if hasattr(self, '_last_mouse_movement') and self._last_mouse_movement:
+                    tracking = (
+                        hasattr(self, 'tracking_processor')
+                        and self.tracking_processor
+                        and self.tracking_processor.is_tracking()
+                    )
+                    if tracking:
+                        fm.record_hand_activity()
+                    # Also record on cursor movement as a fallback for
+                    # legacy mode where is_tracking may lag.
+                    elif hasattr(self, '_last_mouse_movement') and self._last_mouse_movement:
                         dx, dy = self._last_mouse_movement
                         if dx != 0 or dy != 0:
                             fm.record_hand_activity()
