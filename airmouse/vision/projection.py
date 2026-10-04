@@ -7,14 +7,113 @@ Provides normalized coordinates for cursor control.
 
 import numpy as np
 import logging
+import time
 from dataclasses import dataclass, field
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Dict, List
+from enum import Enum
 from .hand_tracker import Hand, Landmark
 from .face_tracker import Face, FaceLandmark
 from .head_coords import HeadCoordinateSystem
 from .virtual_plane import VirtualDisplayPlane
 
 logger = logging.getLogger(__name__)
+
+
+class ProjectionLogLevel(Enum):
+    """Configurable log levels for projection diagnostics."""
+    OFF = 0
+    ERROR = 1
+    WARN = 2
+    INFO = 3
+    DEBUG = 4
+    TRACE = 5
+
+
+class ProjectionDiagnostics:
+    """
+    Structured diagnostics for projection pipeline.
+
+    Collects structured events with configurable log levels so that
+    production users can tune verbosity without changing code.
+    """
+
+    def __init__(self, log_level: ProjectionLogLevel = ProjectionLogLevel.WARN):
+        self._log_level = log_level
+        self._events: List[Dict] = []
+        self._max_events = 1000
+        self._last_sample: Dict[str, float] = {}
+        self._sample_interval = 1.0  # seconds between samples of same event
+
+    @property
+    def log_level(self) -> ProjectionLogLevel:
+        return self._log_level
+
+    @log_level.setter
+    def log_level(self, level: ProjectionLogLevel):
+        self._log_level = level
+
+    def _should_log(self, level: ProjectionLogLevel) -> bool:
+        return level.value <= self._log_level.value
+
+    def _sample_key(self, event_type: str) -> bool:
+        """Rate-limit repeated events of the same type."""
+        now = time.time()
+        last = self._last_sample.get(event_type, 0.0)
+        if now - last >= self._sample_interval:
+            self._last_sample[event_type] = now
+            return True
+        return False
+
+    def log_event(self, level: ProjectionLogLevel, event_type: str, message: str,
+                  details: Optional[Dict] = None):
+        """Log a structured event if the level is enabled."""
+        if not self._should_log(level):
+            return
+        if not self._sample_key(event_type):
+            return
+
+        event = {
+            "timestamp": time.time(),
+            "level": level.name,
+            "event": event_type,
+            "message": message,
+        }
+        if details:
+            event["details"] = details
+
+        self._events.append(event)
+        if len(self._events) > self._max_events:
+            self._events.pop(0)
+
+        if level == ProjectionLogLevel.ERROR:
+            logger.error(f"[PROJECTION] {event_type}: {message}")
+        elif level == ProjectionLogLevel.WARN:
+            logger.warning(f"[PROJECTION] {event_type}: {message}")
+        elif level == ProjectionLogLevel.INFO:
+            logger.info(f"[PROJECTION] {event_type}: {message}")
+        elif level == ProjectionLogLevel.DEBUG:
+            logger.debug(f"[PROJECTION] {event_type}: {message}")
+
+    def get_events(self, limit: int = 100) -> List[Dict]:
+        """Get recent diagnostic events."""
+        return self._events[-limit:] if self._events else []
+
+    def clear(self):
+        """Clear stored events."""
+        self._events.clear()
+        self._last_sample.clear()
+
+    def get_summary(self) -> Dict:
+        """Get a summary of collected diagnostics."""
+        event_counts: Dict[str, int] = {}
+        for event in self._events:
+            etype = event.get("event", "unknown")
+            event_counts[etype] = event_counts.get(etype, 0) + 1
+        return {
+            "total_events": len(self._events),
+            "event_counts": event_counts,
+            "log_level": self._log_level.name,
+        }
 
 
 @dataclass
@@ -38,6 +137,10 @@ class ProjectionResult:
     valid: bool = False
     error_message: str = ""
 
+    # Confidence at time of projection (for gating)
+    hand_confidence: float = 0.0
+    face_confidence: float = 0.0
+
     def get_normalized(self) -> Tuple[float, float]:
         """Get normalized (u, v) coordinates."""
         return (self.u, self.v)
@@ -57,13 +160,22 @@ class HandProjector:
     3. Create ray from eye midpoint through fingertip
     4. Intersect ray with virtual display plane
     5. Convert intersection to normalized [0, 1] coordinates
+
+    Confidence gating:
+    - Hand and face confidence thresholds are configurable.
+    - Low-confidence projections are rejected before ray computation
+      to prevent jitter from noisy landmark estimates.
     """
 
     def __init__(
         self,
         virtual_plane: VirtualDisplayPlane,
         head_coords: HeadCoordinateSystem,
-        use_head_coords_for_ray: bool = True
+        use_head_coords_for_ray: bool = True,
+        min_hand_confidence: float = 0.5,
+        min_face_confidence: float = 0.5,
+        diagnostics: Optional[ProjectionDiagnostics] = None,
+        log_level: ProjectionLogLevel = ProjectionLogLevel.WARN,
     ):
         """
         Initialize HandProjector.
@@ -72,10 +184,21 @@ class HandProjector:
             virtual_plane: Virtual display plane
             head_coords: Head coordinate system
             use_head_coords_for_ray: If True, compute ray in head coordinates for accuracy
+            min_hand_confidence: Minimum hand confidence to accept projection
+            min_face_confidence: Minimum face confidence to accept projection
+            diagnostics: Optional diagnostics instance (created if None)
+            log_level: Log level for diagnostics (used if diagnostics is None)
         """
         self.virtual_plane = virtual_plane
         self.head_coords = head_coords
         self.use_head_coords_for_ray = use_head_coords_for_ray
+        self.min_hand_confidence = min_hand_confidence
+        self.min_face_confidence = min_face_confidence
+
+        if diagnostics is not None:
+            self.diagnostics = diagnostics
+        else:
+            self.diagnostics = ProjectionDiagnostics(log_level=log_level)
 
         # MediaPipe hand landmark indices for index fingertip
         self.INDEX_TIP_IDX = 8  # MediaPipe HandLandmark.INDEX_TIP
@@ -84,6 +207,34 @@ class HandProjector:
         self._last_result = ProjectionResult()
         self._projection_count = 0
         self._failed_count = 0
+        self._gated_count = 0  # Count of confidence-gated rejections
+
+    def set_debug(self, enabled: bool, log_level: ProjectionLogLevel = ProjectionLogLevel.TRACE):
+        """
+        Enable/disable projection debug mode.
+
+        When enabled, each successful projection logs raw fingertip position,
+        ray origin/direction, plane basis, intersection point, parameter t,
+        normalized u/v, validity, and confidence.
+
+        Args:
+            enabled: Whether to enable debug logging
+            log_level: Minimum log level for debug output (default: TRACE)
+        """
+        if enabled:
+            self.diagnostics.log_level = log_level
+        else:
+            self.diagnostics.log_level = ProjectionLogLevel.OFF
+
+    def _debug_projection(self, label: str, **kwargs):
+        """Emit a structured TRACE-level debug event for projection pipeline."""
+        if not self.diagnostics._should_log(ProjectionLogLevel.TRACE):
+            return
+        details = {k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else v) for k, v in kwargs.items()}
+        self.diagnostics.log_event(
+            ProjectionLogLevel.TRACE, "projection_debug",
+            label, details
+        )
 
     def project(
         self,
@@ -104,36 +255,84 @@ class HandProjector:
 
         # Validate inputs
         if not hand or not hand.landmarks or len(hand.landmarks) < 21:
+            self._failed_count += 1
+            self.diagnostics.log_event(
+                ProjectionLogLevel.ERROR, "invalid_hand",
+                "Invalid hand landmarks"
+            )
             return ProjectionResult(
                 valid=False,
                 error_message="Invalid hand landmarks"
             )
 
         if not face or not face.eye_midpoint:
+            self._failed_count += 1
+            self.diagnostics.log_event(
+                ProjectionLogLevel.ERROR, "invalid_face",
+                "Invalid face or missing eye midpoint"
+            )
             return ProjectionResult(
                 valid=False,
                 error_message="Invalid face or missing eye midpoint"
             )
-        
-        # Add confidence check
-        if hasattr(face, 'confidence') and face.confidence < 0.5:
-             return ProjectionResult(
+
+        # Confidence gating — reject low-confidence inputs BEFORE ray
+        # computation to prevent jitter from noisy landmark estimates.
+        hand_conf = getattr(hand, 'confidence', 1.0)
+        face_conf = getattr(face, 'confidence', 1.0)
+
+        if hand_conf < self.min_hand_confidence:
+            self._gated_count += 1
+            self.diagnostics.log_event(
+                ProjectionLogLevel.WARN, "confidence_gated_hand",
+                f"Hand confidence {hand_conf:.2f} below threshold {self.min_hand_confidence:.2f}",
+                {"hand_confidence": hand_conf, "threshold": self.min_hand_confidence}
+            )
+            return ProjectionResult(
                 valid=False,
-                error_message=f"Low face confidence: {face.confidence:.2f}"
+                error_message=f"Low hand confidence: {hand_conf:.2f}",
+                hand_confidence=hand_conf,
+                face_confidence=face_conf,
+            )
+
+        if face_conf < self.min_face_confidence:
+            self._gated_count += 1
+            self.diagnostics.log_event(
+                ProjectionLogLevel.WARN, "confidence_gated_face",
+                f"Face confidence {face_conf:.2f} below threshold {self.min_face_confidence:.2f}",
+                {"face_confidence": face_conf, "threshold": self.min_face_confidence}
+            )
+            return ProjectionResult(
+                valid=False,
+                error_message=f"Low face confidence: {face_conf:.2f}",
+                hand_confidence=hand_conf,
+                face_confidence=face_conf,
             )
 
         if not self.head_coords.is_valid():
             self._failed_count += 1
+            self.diagnostics.log_event(
+                ProjectionLogLevel.ERROR, "invalid_head_coords",
+                "Invalid head coordinate system"
+            )
             return ProjectionResult(
                 valid=False,
-                error_message="Invalid head coordinate system"
+                error_message="Invalid head coordinate system",
+                hand_confidence=hand_conf,
+                face_confidence=face_conf,
             )
 
         if not self.virtual_plane.head_coords or not self.virtual_plane.head_coords.is_valid():
             self._failed_count += 1
+            self.diagnostics.log_event(
+                ProjectionLogLevel.ERROR, "invalid_virtual_plane",
+                "Invalid virtual plane"
+            )
             return ProjectionResult(
                 valid=False,
-                error_message="Invalid virtual plane"
+                error_message="Invalid virtual plane",
+                hand_confidence=hand_conf,
+                face_confidence=face_conf,
             )
 
         try:
@@ -148,11 +347,24 @@ class HandProjector:
             ray_direction_cam = fingertip_cam - eye_midpoint_cam
             ray_norm = np.linalg.norm(ray_direction_cam)
 
+            self._debug_projection("project_start",
+                fingertip_x=float(fingertip_cam[0]), fingertip_y=float(fingertip_cam[1]),
+                fingertip_z=float(fingertip_cam[2]),
+                eye_x=float(eye_midpoint_cam[0]), eye_y=float(eye_midpoint_cam[1]),
+                eye_z=float(eye_midpoint_cam[2]),
+                hand_conf=float(hand_conf), face_conf=float(face_conf))
+
             if ray_norm < 1e-6:
                 self._failed_count += 1
+                self.diagnostics.log_event(
+                    ProjectionLogLevel.WARN, "ray_too_small",
+                    "Ray direction too small (fingertip at eye midpoint)"
+                )
                 return ProjectionResult(
                     valid=False,
-                    error_message="Ray direction too small (fingertip at eye midpoint)"
+                    error_message="Ray direction too small (fingertip at eye midpoint)",
+                    hand_confidence=hand_conf,
+                    face_confidence=face_conf,
                 )
 
             ray_direction_cam = ray_direction_cam / ray_norm
@@ -168,16 +380,25 @@ class HandProjector:
                 # head-space x/y onto the plane surface.  This prevents the
                 # tracking loop from hard-freezing on every such frame.
                 if not result.valid and result.error_message.startswith("Ray-plane intersection failed"):
-                    return self._fallback_projection(eye_midpoint_cam, fingertip_cam)
+                    result = self._fallback_projection(eye_midpoint_cam, fingertip_cam)
+                result.hand_confidence = hand_conf
+                result.face_confidence = face_conf
                 return result
             else:
                 # Project directly in camera coordinates
-                return self._project_in_camera_coords(
+                result = self._project_in_camera_coords(
                     eye_midpoint_cam, ray_direction_cam
                 )
+                result.hand_confidence = hand_conf
+                result.face_confidence = face_conf
+                return result
 
         except Exception as e:
             self._failed_count += 1
+            self.diagnostics.log_event(
+                ProjectionLogLevel.ERROR, "projection_exception",
+                f"Projection error: {e}"
+            )
             logger.exception("Projection failed")
             return ProjectionResult(
                 valid=False,
@@ -258,7 +479,9 @@ class HandProjector:
                 error_message="Ray-plane intersection failed in head coordinates"
             )
 
-        # Convert to normalized coordinates
+        # Convert to normalized coordinates — returns raw u/v WITHOUT
+        # clamping.  Out-of-bounds values are valid; the caller (cursor
+        # controller) maps them to screen coordinates.
         normalized = self.virtual_plane.point_to_normalized(
             self.head_coords.head_to_camera(intersection_head)
         )
@@ -274,6 +497,26 @@ class HandProjector:
 
         # Also get intersection in camera coordinates for debugging
         intersection_cam = self.head_coords.head_to_camera(intersection_head)
+
+        u, v = normalized
+
+        self._debug_projection("project_head_coords_success",
+            eye_head_x=float(eye_midpoint_head[0]), eye_head_y=float(eye_midpoint_head[1]),
+            eye_head_z=float(eye_midpoint_head[2]),
+            fingertip_head_x=float(fingertip_head[0]), fingertip_head_y=float(fingertip_head[1]),
+            fingertip_head_z=float(fingertip_head[2]),
+            ray_dir_x=float(ray_direction_head[0]), ray_dir_y=float(ray_direction_head[1]),
+            ray_dir_z=float(ray_direction_head[2]),
+            plane_normal_x=float(self.virtual_plane._plane_normal_cam[0]) if self.virtual_plane._plane_normal_cam is not None else 0.0,
+            plane_normal_y=float(self.virtual_plane._plane_normal_cam[1]) if self.virtual_plane._plane_normal_cam is not None else 0.0,
+            plane_normal_z=float(self.virtual_plane._plane_normal_cam[2]) if self.virtual_plane._plane_normal_cam is not None else 0.0,
+            intersection_head_x=float(intersection_head[0]), intersection_head_y=float(intersection_head[1]),
+            intersection_head_z=float(intersection_head[2]),
+            plane_width=self.virtual_plane.width, plane_height=self.virtual_plane.height,
+            plane_distance=self.virtual_plane.distance,
+            t=float(np.dot(intersection_head - eye_midpoint_head, ray_direction_head) / max(np.dot(ray_direction_head, ray_direction_head), 1e-10)),
+            u=float(u), v=float(v),
+            valid=True)
 
         result = ProjectionResult(
             u=u,
@@ -363,7 +606,9 @@ class HandProjector:
                 error_message="Ray-plane intersection failed in camera coordinates"
             )
 
-        # Convert to normalized coordinates
+        # Convert to normalized coordinates — returns raw u/v WITHOUT
+        # clamping.  Out-of-bounds values are valid; the caller maps
+        # them to screen coordinates.
         normalized = self.virtual_plane.point_to_normalized(intersection_cam)
 
         if normalized is None:
@@ -374,6 +619,11 @@ class HandProjector:
             )
 
         u, v = normalized
+
+        self._debug_projection("project_cam_coords_success",
+            intersection_cam_x=float(intersection_cam[0]), intersection_cam_y=float(intersection_cam[1]),
+            intersection_cam_z=float(intersection_cam[2]),
+            u=float(u), v=float(v), valid=True)
 
         result = ProjectionResult(
             u=u,
@@ -396,6 +646,9 @@ class HandProjector:
     ) -> ProjectionResult:
         """
         Project from individual landmarks (for testing or alternative input).
+
+        Returns raw u/v values WITHOUT clamping.  Out-of-bounds values
+        are valid; the caller maps them to screen coordinates.
 
         Args:
             index_tip: Index fingertip landmark
@@ -471,6 +724,9 @@ class HandProjector:
                 return ProjectionResult(valid=False, error_message="Normalized conversion failed")
 
             u, v = normalized
+
+            # Return raw u/v — out-of-bounds values are valid and handled
+            # by the caller (cursor controller maps them to screen coords).
             intersection_cam = hc.head_to_camera(intersection_head)
 
             return ProjectionResult(
@@ -492,6 +748,7 @@ class HandProjector:
 
             u, v = normalized
 
+            # Return raw u/v — out-of-bounds values are valid.
             return ProjectionResult(
                 u=u, v=v,
                 intersection_camera=intersection_cam,
@@ -509,23 +766,27 @@ class HandProjector:
         return {
             "total_projections": self._projection_count,
             "failed_projections": self._failed_count,
+            "gated_projections": self._gated_count,
             "success_rate": (
                 (self._projection_count - self._failed_count) / self._projection_count
                 if self._projection_count > 0 else 0.0
-            )
+            ),
+            "diagnostics": self.diagnostics.get_summary(),
         }
 
     def reset_stats(self):
         """Reset projection statistics."""
         self._projection_count = 0
         self._failed_count = 0
+        self._gated_count = 0
+        self.diagnostics.clear()
 
 
 def create_projector(
     face: Face,
     virtual_plane_distance: float = 0.30,
-    virtual_plane_width: float = 0.40,
-    virtual_plane_height: float = 0.25
+    virtual_plane_width: float = 0.70,
+    virtual_plane_height: float = 0.50
 ) -> Optional[HandProjector]:
     """
     Convenience function to create a HandProjector from a face.

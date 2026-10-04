@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import math
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple, Dict
 from enum import Enum
@@ -16,6 +17,15 @@ import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
 
+# Suppress MediaPipe C++ warnings about NORM_RECT / IMAGE_DIMENSIONS.
+# In MediaPipe 1.0.1, the HandLandmarker in IMAGE mode passes normalized
+# ROI rectangles to the landmark_projection_calculator without populating
+# the image dimensions metadata, producing:
+#   "landmark_projection_calculator.cc:81 Using NORM_RECT without IMAGE_DIMENSIONS"
+# The mp.Image constructor already carries width/height to the C library,
+# so image data is correct — the warning is a cosmetic artifact of the
+# internal graph configuration.
+os.environ.setdefault('MEDIPIPE_LOG_LEVEL', 'ERROR')
 
 logger = logging.getLogger(__name__)
 

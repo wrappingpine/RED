@@ -8,11 +8,16 @@ Provides 468 face landmarks with head pose estimation (eye midpoint, nose, foreh
 import cv2
 import numpy as np
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Optional, List, Tuple
 import mediapipe as mp
 from mediapipe.tasks import python as mp_python
 from mediapipe.tasks.python import vision as mp_vision
+
+# Suppress MediaPipe C++ warnings about NORM_RECT / IMAGE_DIMENSIONS.
+# (See airmouse/vision/hand_tracker.py for full explanation.)
+os.environ.setdefault('MEDIPIPE_LOG_LEVEL', 'ERROR')
 
 logger = logging.getLogger(__name__)
 

@@ -53,6 +53,15 @@ class CursorConfig:
     dead_zone: float = 0.02
     invert_x: bool = False
     invert_y: bool = False
+    
+    # Relative mouse mode (new: frame-to-frame hand deltas like physical mouse)
+    use_relative_mode: bool = True  # Use relative hand mouse instead of virtual plane
+    tracking_loss_frames: int = 5  # Frames before declaring tracking loss
+    recovery_frames: int = 3  # Frames to wait before re-centering after recovery
+    stationary_threshold: float = 0.002  # Normalized distance below which hand is considered stationary
+    stationary_frames: int = 10  # Consecutive stationary frames to trigger stabilization
+    auto_recenter_threshold: float = 0.0  # Auto-recenter when hand drifts this far (0 = disabled)
+    min_hand_confidence: float = 0.7  # Minimum hand confidence for movement processing
 
 
 @dataclass

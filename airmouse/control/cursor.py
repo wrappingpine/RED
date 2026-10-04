@@ -1,11 +1,16 @@
 """
 Cursor Control Module for Air Mouse
 
-Maps hand landmarks to screen coordinates with:
-- Dead zone filtering
-- Exponential moving average (EMA) smoothing
-- Configurable sensitivity and acceleration curves
-- Screen boundary clamping
+Supports two modes:
+1. RELATIVE (new): Frame-to-frame hand deltas drive cursor like a physical mouse
+2. VIRTUAL_PLANE (legacy): Absolute position mapping via virtual display plane
+
+The new relative mode:
+- Dead zone filtering for stationary hand stabilization
+- One Euro Filter for low-latency adaptive smoothing
+- Velocity-based acceleration curve
+- Tracking loss detection and cursor jump prevention
+- Reference position tracking with re-centering support
 """
 
 import time
@@ -16,6 +21,12 @@ from enum import Enum
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+class CursorMode(Enum):
+    """Cursor control mode."""
+    RELATIVE = "relative"        # New: frame-to-frame deltas like physical mouse
+    VIRTUAL_PLANE = "virtual_plane"  # Legacy: absolute position via virtual plane
 
 
 from airmouse.control.smoothing import (
@@ -29,19 +40,76 @@ from airmouse.control.smoothing import (
     SmoothingFilterFactory
 )
 
+from airmouse.control.relative_movement import (
+    RelativeMovementEngine, RelativeMouseConfig, MovementResult, MovementState
+)
+
 
 class CursorController:
     """
     Maps hand landmarks to screen cursor position with smoothing and acceleration.
+    
+    Supports two modes:
+    - RELATIVE: New relative hand mouse (frame-to-frame deltas)
+    - VIRTUAL_PLANE: Legacy virtual display plane (absolute mapping)
     """
 
-    def __init__(self, config: Optional[CursorConfig] = None):
+    def __init__(self, config: Optional[CursorConfig] = None, mode: CursorMode = CursorMode.VIRTUAL_PLANE):
         self.config = config or CursorConfig()
+        self.mode = mode
         self._screen_width = self.config.screen_width
         self._screen_height = self.config.screen_height
         self._camera_width = self.config.camera_width
         self._camera_height = self.config.camera_height
 
+        # Initialize the appropriate movement engine based on mode
+        if mode == CursorMode.RELATIVE:
+            self._init_relative_engine()
+        else:
+            self._init_virtual_plane_engine()
+
+    def _init_relative_engine(self):
+        """Initialize the relative movement engine (new system)."""
+        # Convert CursorConfig to RelativeMouseConfig
+        relative_config = RelativeMouseConfig(
+            dead_zone_radius=self.config.dead_zone_radius,
+            sensitivity_precision=self.config.sensitivity_precision,
+            sensitivity_normal=self.config.sensitivity_normal,
+            sensitivity_fast=self.config.sensitivity_fast,
+            base_sensitivity=self.config.base_sensitivity,
+            acceleration_exponent=self.config.acceleration,
+            max_velocity_pixels=max(self.config.max_velocity, self.config.max_velocity_precision),
+            smoothing=self.config.smoothing.value if isinstance(self.config.smoothing, SmoothingAlgorithm) else self.config.smoothing,
+            one_euro_min_cutoff=self.config.one_euro_min_cutoff,
+            one_euro_beta=self.config.one_euro_beta,
+            one_euro_d_cutoff=self.config.one_euro_d_cutoff,
+            ema_alpha=self.config.ema_alpha,
+            tracking_loss_frames=getattr(self.config, 'tracking_loss_frames', 5),
+            recovery_frames=getattr(self.config, 'recovery_frames', 3),
+            stationary_threshold=getattr(self.config, 'stationary_threshold', 0.002),
+            stationary_frames=getattr(self.config, 'stationary_frames', 10),
+            auto_recenter_threshold=getattr(self.config, 'auto_recenter_threshold', 0.0),
+            invert_x=self.config.invert_x,
+            invert_y=self.config.invert_y,
+            screen_width=self._screen_width,
+            screen_height=self._screen_height,
+            preferred_handedness="Right",
+            min_hand_confidence=getattr(self.config, 'min_hand_confidence', 0.7),
+        )
+        self._relative_engine = RelativeMovementEngine(relative_config)
+        self._relative_engine.set_sensitivity_mode(self.config.sensitivity_mode)
+        
+        # Legacy state (for compatibility)
+        self._last_position: Optional[Tuple[float, float]] = None
+        self._last_time: Optional[float] = None
+        self._is_active = False
+        self._reference_point: Optional[Tuple[float, float]] = None
+        self._last_plane_position: Optional[Tuple[float, float]] = None
+        self._accumulator_x: float = 0.0
+        self._accumulator_y: float = 0.0
+
+    def _init_virtual_plane_engine(self):
+        """Initialize the virtual plane engine (legacy system)."""
         # Create smoothing filters using factory - operate on [0,1] plane coordinates
         smoothing_config = SmoothingConfig(
             algorithm=self.config.smoothing,
@@ -66,6 +134,9 @@ class CursorController:
         """Update screen dimensions."""
         self._screen_width = width
         self._screen_height = height
+        if self.mode == CursorMode.RELATIVE and hasattr(self, '_relative_engine'):
+            self._relative_engine.config.screen_width = width
+            self._relative_engine.config.screen_height = height
 
     def update_camera_size(self, width: int, height: int):
         """Update camera frame dimensions."""
@@ -187,6 +258,59 @@ class CursorController:
         Returns:
             (screen_x, screen_y) tuple or None if no valid hand
         """
+        if self.mode == CursorMode.RELATIVE:
+            return self._map_hand_to_cursor_relative(hand)
+        else:
+            return self._map_hand_to_cursor_virtual_plane(hand)
+
+    def _map_hand_to_cursor_relative(self, hand) -> Optional[Tuple[int, int]]:
+        """
+        Map hand to cursor using relative movement engine.
+        """
+        if not hand or not hand.landmarks:
+            return None
+
+        # Get the reference point (index tip or palm center)
+        if self.config.use_index_tip:
+            ref_point = hand.index_tip
+        else:
+            ref_point = hand.palm_center
+
+        if not ref_point:
+            return None
+
+        # Convert to normalized coordinates relative to camera frame
+        x_norm = ref_point.x
+        y_norm = ref_point.y
+
+        # Process through relative movement engine
+        result = self._relative_engine.process_hand(x_norm, y_norm, hand.confidence)
+
+        if not result.has_movement:
+            return self._last_position
+
+        # Convert relative movement to absolute screen position
+        if self._last_position is None:
+            # First frame - center cursor
+            self._last_position = (self._screen_width // 2, self._screen_height // 2)
+        
+        new_x = self._last_position[0] + result.dx
+        new_y = self._last_position[1] + result.dy
+
+        # Clamp to screen bounds
+        new_x = max(0, min(self._screen_width - 1, new_x))
+        new_y = max(0, min(self._screen_height - 1, new_y))
+
+        result_pos = (int(new_x), int(new_y))
+        self._last_position = result_pos
+        self._is_active = True
+
+        return result_pos
+
+    def _map_hand_to_cursor_virtual_plane(self, hand) -> Optional[Tuple[int, int]]:
+        """
+        Map hand to cursor using virtual plane (legacy system).
+        """
         if not hand or not hand.landmarks:
             return None
 
@@ -266,6 +390,40 @@ class CursorController:
         Returns:
             (dx, dy) relative movement or None
         """
+        if self.mode == CursorMode.RELATIVE:
+            return self._get_relative_movement_relative(hand)
+        else:
+            return self._get_relative_movement_virtual_plane(hand)
+
+    def _get_relative_movement_relative(self, hand) -> Optional[Tuple[int, int]]:
+        """
+        Get relative movement using relative engine.
+        """
+        if not hand or not hand.landmarks:
+            return None
+
+        if self.config.use_index_tip:
+            ref_point = hand.index_tip
+        else:
+            ref_point = hand.palm_center
+
+        if not ref_point:
+            return None
+
+        x_norm = ref_point.x
+        y_norm = ref_point.y
+
+        result = self._relative_engine.process_hand(x_norm, y_norm, hand.confidence)
+
+        if not result.has_movement:
+            return (0, 0)
+
+        return (result.dx, result.dy)
+
+    def _get_relative_movement_virtual_plane(self, hand) -> Optional[Tuple[int, int]]:
+        """
+        Get relative mouse movement (dx, dy) for uinput using virtual plane.
+        """
         if not hand or not hand.landmarks:
             return None
 
@@ -292,18 +450,13 @@ class CursorController:
     def get_relative_movement_from_plane(self, x_norm: float, y_norm: float) -> Optional[Tuple[int, int]]:
         """
         Get relative mouse movement from normalized plane coordinates (head-relative mode).
-
-        Uses frame-to-frame deltas: delta = current - previous_frame_position.
-        The _reference_point is the calibration zero point (initial hand position),
-        used only to establish the first previous_frame_position.
-
-        Args:
-            x_norm: Normalized X position on virtual plane (0-1)
-            y_norm: Normalized Y position on virtual plane (0-1)
-
-        Returns:
-            (dx, dy) relative movement in screen pixels for uinput, or None
+        Legacy virtual plane mode only.
         """
+        if self.mode == CursorMode.RELATIVE:
+            # In relative mode, this is not used - use get_relative_movement instead
+            logger.warning("get_relative_movement_from_plane called in RELATIVE mode - not supported")
+            return None
+
         current_time = time.monotonic()
 
         # Initialize reference point and previous frame position on first call
@@ -372,12 +525,16 @@ class CursorController:
         self._last_plane_position = None
         self._accumulator_x = 0.0
         self._accumulator_y = 0.0
-        if hasattr(self._smoother_x, 'reset'):
-            self._smoother_x.reset()
-            self._smoother_y.reset()
+        
+        if self.mode == CursorMode.RELATIVE and hasattr(self, '_relative_engine'):
+            self._relative_engine.reset()
         else:
-            self._smoother_x.value = None
-            self._smoother_y.value = None
+            if hasattr(self._smoother_x, 'reset'):
+                self._smoother_x.reset()
+                self._smoother_y.reset()
+            else:
+                self._smoother_x.value = None
+                self._smoother_y.value = None
 
     def set_active(self, active: bool):
         """Set whether controller is active (tracking hand)."""
@@ -391,11 +548,38 @@ class CursorController:
     def set_sensitivity_mode(self, mode: SensitivityMode):
         """Set the sensitivity mode (Precision/Normal/Fast)."""
         self.config.sensitivity_mode = mode
+        if self.mode == CursorMode.RELATIVE and hasattr(self, '_relative_engine'):
+            self._relative_engine.set_sensitivity_mode(mode)
         logger.info(f"Sensitivity mode changed to: {mode.value} (factor: {self.config.effective_sensitivity:.2f})")
 
     def get_sensitivity_mode(self) -> SensitivityMode:
         """Get current sensitivity mode."""
         return self.config.sensitivity_mode
+
+    # New methods for relative mode
+    def recenter(self, position: Optional[Tuple[float, float]] = None):
+        """Recenter the relative movement reference point."""
+        if self.mode == CursorMode.RELATIVE and hasattr(self, '_relative_engine'):
+            self._relative_engine.recenter(position)
+        else:
+            logger.warning("recenter() only available in RELATIVE mode")
+
+    def get_movement_stats(self) -> dict:
+        """Get movement engine statistics (relative mode)."""
+        if self.mode == CursorMode.RELATIVE and hasattr(self, '_relative_engine'):
+            return self._relative_engine.get_stats()
+        return {}
+
+    def set_mode(self, mode: CursorMode):
+        """Switch cursor control mode."""
+        if mode != self.mode:
+            self.mode = mode
+            self.reset()
+            if mode == CursorMode.RELATIVE:
+                self._init_relative_engine()
+            else:
+                self._init_virtual_plane_engine()
+            logger.info(f"Cursor mode changed to: {mode.value}")
 
 
 def get_screen_size() -> Tuple[int, int]:
@@ -419,7 +603,7 @@ if __name__ == "__main__":
     from pathlib import Path
     sys.path.insert(0, str(Path(__file__).parent.parent))
 
-    from vision.hand_tracker import Hand, Landmark, HandLandmark
+    from airmouse.vision.hand_tracker import Hand, Landmark, HandLandmark
 
     logging.basicConfig(level=logging.INFO)
 
@@ -446,9 +630,10 @@ if __name__ == "__main__":
         ema_alpha=0.3
     )
 
-    controller = CursorController(config)
+    # Test RELATIVE mode
+    controller = CursorController(config, mode=CursorMode.RELATIVE)
 
-    print("Testing CursorController...")
+    print("Testing CursorController (RELATIVE mode)...")
     for i in range(10):
         # Simulate hand moving right
         hand.index_tip.x = 0.5 + i * 0.02

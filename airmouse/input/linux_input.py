@@ -111,6 +111,18 @@ class InputBackendBase(ABC):
         """Clean up resources."""
         pass
 
+    def get_availability_reason(self) -> str:
+        """Get a diagnostic reason for availability (default: available)."""
+        return "available"
+
+    def get_health_reason(self) -> str:
+        """Get a diagnostic reason for health status (default: healthy)."""
+        return "healthy"
+
+    def try_recover(self) -> bool:
+        """Attempt to recover from a transient failure. Default: re-initialize."""
+        return self.initialize()
+
 
 class UInputBackend(InputBackendBase):
     """uinput kernel interface backend (current implementation)."""
@@ -118,18 +130,60 @@ class UInputBackend(InputBackendBase):
     def __init__(self):
         self._virtual_mouse = None
         self._initialized = False
+        self._init_error: str = ""
 
     def is_available(self) -> bool:
-        return os.path.exists('/dev/uinput') and os.access('/dev/uinput', os.W_OK)
+        if not os.path.exists('/dev/uinput'):
+            return False
+        if not os.access('/dev/uinput', os.W_OK):
+            return False
+        return True
+
+    def get_availability_reason(self) -> str:
+        """Get a diagnostic reason for availability."""
+        if not os.path.exists('/dev/uinput'):
+            return "uinput_device_missing"
+        if not os.access('/dev/uinput', os.W_OK):
+            return "uinput_permission_denied"
+        return "available"
 
     def initialize(self) -> bool:
         try:
             from ..input.uinput_mouse import VirtualMouse, UInputDeviceConfig
             self._virtual_mouse = VirtualMouse(UInputDeviceConfig(name="Air Mouse"))
-            return self._virtual_mouse.create()
+            if self._virtual_mouse.create():
+                self._initialized = True
+                self._init_error = ""
+                logger.info("uinput backend initialized successfully")
+                return True
+            else:
+                self._init_error = "uinput_device_create_failed"
+                logger.error("uinput backend: device creation failed")
+                return False
+        except PermissionError:
+            self._init_error = "uinput_permission_denied"
+            logger.error("uinput backend: permission denied for /dev/uinput")
+            return False
+        except FileNotFoundError:
+            self._init_error = "uinput_device_missing"
+            logger.error("uinput backend: /dev/uinput not found")
+            return False
         except Exception as e:
+            self._init_error = f"uinit_error: {e}"
             logger.error(f"Failed to initialize uinput backend: {e}")
             return False
+
+    def get_health_reason(self) -> str:
+        """Get a diagnostic reason for health status."""
+        if not self._initialized:
+            return self._init_error or "backend_not_initialized"
+        if self._virtual_mouse is None:
+            return "virtual_mouse_none"
+        if not self._virtual_mouse.is_created():
+            return "device_not_created"
+        if not self._virtual_mouse.is_healthy():
+            return "device_unhealthy"
+        return "healthy"
 
     def move(self, dx: int, dy: int) -> bool:
         if self._virtual_mouse and self._virtual_mouse.is_created():
@@ -189,11 +243,25 @@ class UInputBackend(InputBackendBase):
             return True
         return False
 
-    def cleanup(self):
+    def try_recover(self) -> bool:
+        """Attempt to recover from a transient failure."""
+        if self._virtual_mouse and self._virtual_mouse.is_healthy():
+            return True
+        logger.info("uinput backend: attempting recovery")
+        self._cleanup()
+        return self.initialize()
+
+    def _cleanup(self):
         if self._virtual_mouse:
-            self._virtual_mouse.destroy()
+            try:
+                self._virtual_mouse.destroy()
+            except Exception:
+                pass
             self._virtual_mouse = None
         self._initialized = False
+
+    def cleanup(self):
+        self._cleanup()
 
 
 class X11Backend(InputBackendBase):
@@ -333,6 +401,7 @@ class YdotoolBackend(InputBackendBase):
         self._ydotool_path = None
         self._ydotoold_running = False
         self._initialized = False
+        self._init_error: str = ""
 
     def is_available(self) -> bool:
         # Check if ydotool is installed. We deliberately do NOT require the
@@ -342,6 +411,11 @@ class YdotoolBackend(InputBackendBase):
         # fresh boot.
         self._ydotool_path = shutil.which('ydotool')
         return self._ydotool_path is not None
+
+    def get_availability_reason(self) -> str:
+        if shutil.which('ydotool') is None:
+            return "ydotool_not_installed"
+        return "available"
 
     def _try_start_daemon(self) -> bool:
         """Attempt to start the ydotoold daemon if it is not already running."""
@@ -392,6 +466,7 @@ class YdotoolBackend(InputBackendBase):
 
     def initialize(self) -> bool:
         if not self.is_available():
+            self._init_error = "ydotool_not_installed"
             return False
 
         # Check if ydotoold is running
@@ -405,6 +480,7 @@ class YdotoolBackend(InputBackendBase):
             if not self._ydotoold_running:
                 logger.warning("ydotoold daemon not running - attempting to start it")
                 if not self._try_start_daemon():
+                    self._init_error = "ydotoold_unavailable"
                     logger.warning(
                         "ydotoold daemon not running. Start manually with: "
                         "sudo systemctl start ydotoold  (or: sudo ydotoold &)"
@@ -412,15 +488,27 @@ class YdotoolBackend(InputBackendBase):
                     # Still mark initialized so the caller can decide;
                     # mouse operations will report failures rather than
                     # silently no-op'ing.
+                else:
+                    self._init_error = ""
             else:
+                self._init_error = ""
                 logger.info("ydotoold daemon is running")
 
             self._initialized = True
             logger.info("ydotool backend initialized")
             return True
         except Exception as e:
+            self._init_error = f"ydotool_init_error: {e}"
             logger.error(f"Failed to initialize ydotool backend: {e}")
             return False
+
+    def get_health_reason(self) -> str:
+        """Get a diagnostic reason for health status."""
+        if not self._initialized:
+            return self._init_error or "backend_not_initialized"
+        if not self._ydotoold_running:
+            return "ydotoold_daemon_not_running"
+        return "healthy"
 
     def _run_ydotool(self, *args) -> bool:
         """Run ydotool command."""
@@ -477,6 +565,12 @@ class YdotoolBackend(InputBackendBase):
             return self._run_ydotool('click', 'wheel_right')
         else:
             return self._run_ydotool('click', 'wheel_left')
+
+    def try_recover(self) -> bool:
+        """Attempt to recover from a transient failure."""
+        logger.info("ydotool backend: attempting recovery")
+        self._ydotoold_running = False
+        return self.initialize()
 
     def cleanup(self):
         self._initialized = False
@@ -551,12 +645,18 @@ class LinuxInputManager:
     4. uinput (fallback, works everywhere with /dev/uinput)
     """
 
-    # Backend priority order (higher = preferred)
+    # Backend priority order (higher = preferred).
+    #
+    # uinput is preferred over ydotool because:
+    # 1. It works on both X11 and Wayland without any daemon
+    # 2. It uses direct kernel I/O — no subprocess-per-move overhead
+    # 3. ydotool spawns a new process for every mousemove/click call,
+    #    which is slow, unreliable, and causes the cursor to stutter.
     BACKEND_PRIORITY = [
-        (InputBackend.WAYLAND, 100),
+        (InputBackend.UINPUT, 100),
+        (InputBackend.WAYLAND, 90),
         (InputBackend.YDOTOL, 80),
         (InputBackend.X11, 60),
-        (InputBackend.UINPUT, 40),
     ]
 
     def __init__(self):
@@ -615,14 +715,17 @@ class LinuxInputManager:
         for backend_type, priority in self.BACKEND_PRIORITY:
             backend = backends[backend_type]
             if backend.is_available():
-                logger.info(f"Backend {backend_type.value} is available")
+                avail_reason = backend.get_availability_reason()
+                logger.info(f"Backend {backend_type.value} is available (reason={avail_reason})")
                 if backend.initialize():
                     available_backends.append((backend_type, backend, priority))
                     logger.info(f"Backend {backend_type.value} initialized successfully")
                 else:
-                    logger.warning(f"Backend {backend_type.value} available but failed to initialize")
+                    health_reason = backend.get_health_reason()
+                    logger.warning(f"Backend {backend_type.value} available but failed to initialize (reason={health_reason})")
             else:
-                logger.debug(f"Backend {backend_type.value} not available")
+                avail_reason = backend.get_availability_reason()
+                logger.debug(f"Backend {backend_type.value} not available (reason={avail_reason})")
 
         if not available_backends:
             logger.error("No input backends available!")
@@ -792,13 +895,27 @@ class LinuxInputManager:
         with self._lock:
             if self._backend is None:
                 return False
-            # Check if backend is initialized
-            if hasattr(self._backend, '_initialized') and not self._backend._initialized:
+            # Use the backend's own health check with diagnostic reason
+            reason = self._backend.get_health_reason()
+            if reason != "healthy":
+                logger.debug(f"Input backend unhealthy: {reason}")
                 return False
-            # For uinput backend, check virtual mouse health
-            if hasattr(self._backend, '_virtual_mouse') and self._backend._virtual_mouse:
-                return self._backend._virtual_mouse.is_healthy()
             return True
+
+    def get_health_reason(self) -> str:
+        """Get a diagnostic reason for the input manager's health status."""
+        with self._lock:
+            if self._backend is None:
+                return "no_backend"
+            return self._backend.get_health_reason()
+
+    def try_recover(self) -> bool:
+        """Attempt to recover from a transient failure."""
+        with self._lock:
+            if self._backend is None:
+                return False
+            logger.info("Attempting input backend recovery")
+            return self._backend.try_recover()
 
     def __enter__(self):
         self.initialize()

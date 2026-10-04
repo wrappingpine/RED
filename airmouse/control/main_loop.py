@@ -608,7 +608,13 @@ class AirMouseController:
             safety_config.corner_hold_time = 0.5
             safety_config.enable_velocity_limit = True
             safety_config.max_cursor_velocity = 5000
-            safety_config.enable_focus_loss_pause = True
+            # Focus-loss pause is DISABLED by default (see SafetyConfig).
+            # On Wayland/COSMIC the focus monitor falls back to a
+            # hand-activity heuristic that cannot distinguish a stationary
+            # hand in the dead zone from a user who walked away, causing
+            # constant pause/resume cycles.  Only enable on X11 where a
+            # real focus query is available.
+            safety_config.enable_focus_loss_pause = False
             safety_config.enable_inactivity_timeout = False
             safety_config.inactivity_timeout = 300.0  # 5 minutes
 
@@ -1085,11 +1091,16 @@ class AirMouseController:
             self.cursor_controller.set_sensitivity_mode(SensitivityMode.NORMAL)
 
         # Get cursor position from tracking processor (normalized from virtual plane)
+        # For relative mode, use the primary hand directly
         norm_position = self.tracking_processor.get_cursor_position()
 
-        # Convert normalized position to pixel movement via cursor controller
+        # Get relative movement from cursor controller
+        # In relative mode, use the primary hand for frame-to-frame deltas
         rel_movement = None
-        if norm_position is not None:
+        if tracking_result.primary_hand is not None:
+            rel_movement = self.cursor_controller.get_relative_movement(tracking_result.primary_hand)
+        elif norm_position is not None:
+            # Fallback for virtual plane mode
             rel_movement = self.cursor_controller.get_relative_movement_from_plane(norm_position[0], norm_position[1])
 
         frame_data.cursor_position = norm_position
@@ -1382,7 +1393,8 @@ class AirMouseController:
         """
         # Check input device health
         if self.input_manager and not self.input_manager.is_healthy():
-            logger.warning("Input gate: device unhealthy")
+            reason = self.input_manager.get_health_reason()
+            logger.warning(f"Input gate: device unhealthy (reason={reason})")
             return False
 
         # Check tracking status

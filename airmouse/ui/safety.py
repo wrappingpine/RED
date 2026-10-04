@@ -65,8 +65,13 @@ class SafetyConfig:
     # Global hotkey (handled by hotkey manager)
     enable_global_hotkey: bool = True
 
-    # Focus loss
-    enable_focus_loss_pause: bool = True
+    # Focus loss — disabled by default. On Wayland/COSMIC the focus monitor
+    # falls back to a hand-activity heuristic that cannot distinguish a
+    # stationary hand in the dead zone from a user who walked away.  For an
+    # air-mouse the intended architecture is background operation: the user
+    # is always "engaged" while the app is running.  Enable this only when
+    # running on X11 where a real focus query is available.
+    enable_focus_loss_pause: bool = False
     focus_check_interval: float = 0.5  # seconds
 
     # Velocity limiting

@@ -59,9 +59,17 @@ class VirtualDisplayPlane:
     """
 
     # Plane dimensions (meters)
+    # NOTE: These dimensions are deliberately large enough to cover the
+    # full range of hand motion in normalized head coordinates.
+    # MediaPipe normalized landmarks span roughly ±0.35 in head X and
+    # ±0.25 in head Y for a typical user at 30cm distance.  The old
+    # 0.40×0.25m plane was too small — hands reaching to the edges
+    # produced v values far outside [0,1] (e.g. 2.757, -0.587).
+    # The new 0.70×0.50m plane provides comfortable margin while
+    # maintaining a usable 1.4:1 aspect ratio.
     distance: float = 0.30  # 30cm in front of face (positive Z in head coords = forward)
-    width: float = 0.40     # 40cm wide
-    height: float = 0.25    # 25cm high (~16:10 aspect)
+    width: float = 0.70     # 70cm wide (covers ±0.35m)
+    height: float = 0.50    # 50cm high (covers ±0.25m)
 
     # Head coordinate system reference
     head_coords: Optional[HeadCoordinateSystem] = None
@@ -224,10 +232,10 @@ class VirtualDisplayPlane:
         """
         Convert 3D point on plane to normalized (u, v) coordinates [0, 1] x [0, 1].
 
-        Intersection failures (point outside plane bounds):
-        - Clamp to plane boundary
-        - Log warning
-        - Continue without crashing
+        Returns raw u/v values WITHOUT clamping.  Values outside [0, 1]
+        indicate the point is beyond the plane boundary — the caller is
+        responsible for mapping these to screen coordinates (e.g. by
+        clamping at the screen edge, or by using a larger virtual plane).
 
         Args:
             point_camera: 3D point on plane in camera coordinates
@@ -263,16 +271,14 @@ class VirtualDisplayPlane:
                 "event=projection_intersection_failed "
                 f"u={u:.3f} v={v:.3f} "
                 "reason=out_of_bounds "
-                "action=clamp_to_boundary"
+                "action=return_raw"
             )
             logger.debug(
-                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - clamping to boundary"
+                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - returning raw values"
             )
 
-        # Clamp to [0, 1]  (coordinate contract level - filters must not clamp)
-        u = np.clip(u, 0.0, 1.0)
-        v = np.clip(v, 0.0, 1.0)
-
+        # Return raw u/v WITHOUT clamping — the caller decides how to
+        # map out-of-bounds values to screen coordinates.
         return (float(u), float(v))
 
     def clamp_to_bounds(self, u: float, v: float) -> Tuple[float, float]:
