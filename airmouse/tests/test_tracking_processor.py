@@ -226,8 +226,8 @@ class TestTrackingConfig:
 
         assert config.use_head_relative is True
         assert config.virtual_plane_distance == 0.30
-        assert config.virtual_plane_width == 0.40
-        assert config.virtual_plane_height == 0.25
+        assert config.virtual_plane_width == 0.70
+        assert config.virtual_plane_height == 0.50
         assert config.enable_two_hand is True
         assert config.preferred_handedness == "Right"
 
@@ -240,8 +240,6 @@ class TestTrackingProcessor:
         config = TrackingConfig(
             use_head_relative=True,
             virtual_plane_distance=0.30,
-            virtual_plane_width=0.40,
-            virtual_plane_height=0.25,
             enable_two_hand=True,
             preferred_handedness="Right"
         )

@@ -93,6 +93,14 @@ class TrackingStatus:
         """Record a hand detection event."""
         state = get_confidence_state(raw_confidence, evidence=evidence)
         self.confidence.update(raw_confidence, evidence=evidence)
+        
+        # Auto-reacquisition: if we're in LOST phase and detect a hand with 
+        # acceptable confidence, start the reacquisition process
+        if self.phase == TrackingPhase.LOST:
+            if state in (ConfidenceState.HIGH, ConfidenceState.MEDIUM):
+                logger.info(f"TRACKING_RECOVERY: hand detected with confidence={raw_confidence:.2f} ({state.name}), starting reacquisition")
+                self.record_reacquisition_start()
+        
         return state
     
     def record_hand_lost(self, reason: LostReason, evidence: str = "") -> None:
@@ -331,9 +339,45 @@ class TrackingStatus:
         
         if self.phase == TrackingPhase.LOST:
             self.lost_duration = current_time - self.last_lost_time if self.last_lost_time else 0.0
+            
+        elif self.phase == TrackingPhase.REACQUIRING:
+            # During REACQUIRING, verify confidence is still acceptable
+            # If confidence drops, go back to LOST
+            if self.confidence.state in (ConfidenceState.LOW, ConfidenceState.LOST):
+                logger.warning(f"REACQUIRING -> LOST: confidence dropped to {self.confidence.state.name}")
+                self.record_hand_lost(LostReason.CONFIDENCE_DROP, "confidence dropped during reacquisition")
+            else:
+                # Confidence is acceptable, advance to stabilization
+                self.phase = TrackingPhase.STABILIZING
+                self.stabilization_frames = 0
+                logger.info(f"REACQUIRING -> STABILIZING")
+                if self._on_phase_change:
+                    try:
+                        self._on_phase_change(TrackingPhase.REACQUIRING, self.phase)
+                    except Exception as e:
+                        logger.error(f"Error in phase_change callback: {e}")
+        
         elif self.phase == TrackingPhase.STABILIZING:
-            # In stabilization, check if we should proceed to tracking
-            if self.stabilization_frames >= 10:  # Safety timeout
+            # Count stabilization frames
+            self.stabilization_frames += 1
+            
+            # Require minimum stabilization frames
+            required_frames = {
+                ConfidenceState.HIGH: 3,
+                ConfidenceState.MEDIUM: 5,
+                ConfidenceState.LOW: 10,
+                ConfidenceState.LOST: 15,
+            }
+            
+            target = required_frames.get(self.confidence.state, 5)
+            
+            logger.debug(f"STABILIZING: frame {self.stabilization_frames}/{target}")
+            
+            # Check if confidence dropped during stabilization
+            if self.confidence.state in (ConfidenceState.LOW, ConfidenceState.LOST):
+                logger.warning(f"STABILIZING -> LOST: confidence dropped to {self.confidence.state.name}")
+                self.record_hand_lost(LostReason.CONFIDENCE_DROP, "confidence dropped during stabilization")
+            elif self.stabilization_frames >= target:
                 self.record_motion_baseline_established()
         
         # Cleanup old state

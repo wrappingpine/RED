@@ -96,8 +96,8 @@ class TrackingConfig:
     # Head-relative tracking (new 3D system)
     use_head_relative: bool = True  # Enable head-anchored virtual plane
     virtual_plane_distance: float = 0.30  # meters (30cm in front, positive Z in head coords = forward)
-    virtual_plane_width: float = 0.40     # meters (40cm)
-    virtual_plane_height: float = 0.25    # meters (25cm)
+    virtual_plane_width: float = 0.70     # meters (70cm) - covers full hand range
+    virtual_plane_height: float = 0.50    # meters (50cm) - covers full hand range
     use_head_coords_for_ray: bool = True  # Compute ray in head coordinates
     head_coords_smoothing_alpha: float = 0.3  # Temporal smoothing for head coordinate system
 
@@ -420,7 +420,14 @@ class TrackedHand:
                     # Use different thresholds: wrist can move more than fingertips
                     threshold = config.max_wrist_jump if idx == 0 else config.max_landmark_jump
                     if jump > threshold:
-                        logger.warning(f"Large jump detected at landmark {idx} ({HandLandmark(idx).name}): {jump:.3f} > {threshold} (frame={self.frame_count})")
+                        logger.warning(
+                            f"TRACKING_JUMP_DETECTED: frame={self.frame_count} "
+                            f"landmark={idx}({HandLandmark(idx).name}) "
+                            f"jump={jump:.4f} > threshold={threshold:.4f} "
+                            f"old=({old_lm.x:.4f},{old_lm.y:.4f}) "
+                            f"new=({new_lm.x:.4f},{new_lm.y:.4f}) "
+                            f"confidence={new_hand.confidence:.3f}"
+                        )
                         if config.reset_on_large_jump:
                             self.lost_frames += 1
                             return False
@@ -432,7 +439,13 @@ class TrackedHand:
             if old_center and new_center:
                 jump = math.sqrt((new_center.x - old_center.x)**2 + (new_center.y - old_center.y)**2)
                 if jump > config.max_hand_center_jump:
-                    logger.warning(f"Large hand center jump: {jump:.3f} > {config.max_hand_center_jump} (frame={self.frame_count})")
+                    logger.warning(
+                        f"TRACKING_JUMP_DETECTED: frame={self.frame_count} "
+                        f"hand_center jump={jump:.4f} > threshold={config.max_hand_center_jump:.4f} "
+                        f"old=({old_center.x:.4f},{old_center.y:.4f}) "
+                        f"new=({new_center.x:.4f},{new_center.y:.4f}) "
+                        f"confidence={new_hand.confidence:.3f}"
+                    )
                     if config.reset_on_large_jump:
                         self.lost_frames += 1
                         return False

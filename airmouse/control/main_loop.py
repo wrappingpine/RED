@@ -378,6 +378,9 @@ class AirMouseController:
         self._cursor_frozen: bool = False
         self._drag_active: bool = False
         self._consecutive_lost: int = 0
+        self._frame_count: int = 0
+        self._consecutive_projection_failures: int = 0
+        self._max_projection_failures: int = 5
 
     def initialize(self) -> bool:
         """Initialize all components."""
@@ -1040,27 +1043,46 @@ class AirMouseController:
             return
 
         # LOST_TRACK means hands were detected but projection/validation failed.
-        # With the fallback projection in HandProjector, LOST_TRACK should now be
-        # rare (only true invalid geometry). When it occurs, HOLD the last valid
-        # cursor position rather than fully resetting everything, to avoid a
-        # ping-pong where the hand is created and destroyed every other frame.
+        # This is a PROJECTION failure, NOT a tracking loss.
+        # The hand is still visible — only the fingertip ray falls outside
+        # the virtual control plane.  Do NOT convert every projection failure
+        # into tracking_lost.
         if tracking_result.tracking_state == TrackingState.LOST_TRACK:
             # Release buttons for safety but keep cursor state so we don't jump
             if self.input_manager:
                 self.input_manager.release_all()
             if self.gesture_recognizer:
                 self.gesture_recognizer.reset()
-            # Update tracking status - hand lost
-            if hands:
-                max_conf = max((h.confidence for h in hands), default=0.0)
-                if max_conf < 0.15:
-                    self._tracking_status.record_hand_lost(LostReason.CONFIDENCE_DROP,
-                                                           f"confidence={max_conf:.2f}")
-                else:
-                    self._tracking_status.record_hand_lost(LostReason.LOW_CONFIDENCE,
-                                                           f"projection_failed confidence={max_conf:.2f}")
+
+            max_conf = max((h.confidence for h in hands), default=0.0)
+            proj = tracking_result.projection
+
+            # Grace period: tolerate brief projection failures without
+            # declaring tracking lost.  Only after N consecutive bad frames
+            # do we transition to LOST.
+            self._consecutive_projection_failures = getattr(
+                self, '_consecutive_projection_failures', 0) + 1
+            max_failures = getattr(self, '_max_projection_failures', 5)
+
+            if max_conf < 0.15:
+                # Hand confidence genuinely low — this IS a tracking problem
+                self._tracking_status.record_hand_lost(
+                    LostReason.CONFIDENCE_DROP,
+                    f"confidence={max_conf:.2f}")
+            elif self._consecutive_projection_failures >= max_failures:
+                # Sustained projection failure — hand may be outside plane
+                self._tracking_status.record_hand_lost(
+                    LostReason.TRACKING_JUMP,
+                    f"projection_failed_sustained confidence={max_conf:.2f} "
+                    f"frames={self._consecutive_projection_failures}")
             else:
-                self._tracking_status.record_hand_lost(LostReason.NO_HAND_DETECTED)
+                # Brief projection failure — hold position, do NOT freeze
+                logger.debug(
+                    f"TRACKING_PROJECTION_FAILURE: frame={self._frame_count} "
+                    f"confidence={max_conf:.2f} "
+                    f"consecutive_failures={self._consecutive_projection_failures}/{max_failures} "
+                    f"action=hold_position")
+
             frame_data.tracking_state = TrackingState.LOST_TRACK
             return
 
@@ -1078,10 +1100,25 @@ class AirMouseController:
 
         # Update tracking confidence with the primary hand's confidence
         if primary_hand:
+            # Reset projection failure counter when tracking succeeds
+            self._consecutive_projection_failures = 0
+
             self._tracking_status.record_hand_detected(
                 primary_hand.confidence,
                 evidence=f"tracking_state={tracking_result.tracking_state.value}"
             )
+            # Track phase progression from STARTING to TRACKING
+            # After hand is detected with sufficient confidence, transition to active tracking
+            if self._tracking_status.phase == TrackingPhase.STARTING:
+                # First valid detection: transition directly to TRACKING
+                # The STARTING phase should only block for a brief moment to avoid startup jumps
+                logger.info(f"TRACKING_STATE: previous=STARTING current=TRACKING reason=first_valid_detection confidence={primary_hand.confidence:.2f}")
+                # Record motion baseline to prevent initial jump
+                self._tracking_status.record_motion_baseline_established()
+                # Log transition
+                logger.info(f"TRACKING_STATE_TRANSITION: STARTING -> TRACKING confidence={primary_hand.confidence:.2f}")
+            # Update tracking status timers and phase transitions
+            self._tracking_status.update()
 
         # Handle PRECISION_MODE: switch to precision sensitivity when two hands tracked
         if tracking_result.tracking_state == TrackingState.PRECISION_MODE:
@@ -1223,31 +1260,91 @@ class AirMouseController:
     def _handle_gestures(self, events: List[GestureEvent],
                          rel_movement: Optional[tuple], hands: List[TrackedHand]):
         """Handle gesture events and move mouse.
-        
+
         §48: Single safety gate before desktop input. All input goes through
         this gate which validates:
         - Tracking stability (loss tracking prevents invalid frames)
         - Confidence thresholds (per §53)
         - Gesture safety (high-risk actions need higher confidence)
-        
+
         Returns:
             bool: True if any input was delivered, False otherwise
         """
         if not self.input_manager:
+            logger.warning("CURSOR_PIPELINE_FAILURE: stage=input_manager reason=none")
             return False
 
         # Determine if we should deliver any input at all
         should_deliver_input = self._should_deliver_input(
             rel_movement, events, hands
         )
-        
+
+        # Structured cursor pipeline diagnostics
+        # Log the full cursor pipeline at each stage so failures can be
+        # traced to the exact failing layer.  Every log line carries the
+        # same frame_id so stale-state bugs are visible.
+        self._frame_count = getattr(self, '_frame_count', 0) + 1
+        frame_id = self._frame_count
+
+        norm_pos = None
+        if self.tracking_processor:
+            norm_pos = self.tracking_processor.get_cursor_position()
+        proj = None
+        if self.tracking_processor and hasattr(self.tracking_processor, '_last_projection'):
+            proj = self.tracking_processor._last_projection
+
+        gate_open = should_deliver_input
+        backend_ok = self.input_manager.is_healthy()
+        backend_type = self.input_manager.get_backend_type().value
+        backend_reason = self.input_manager.get_health_reason()
+
+        # Log gate state with tracking phase for traceability
+        tracking_phase = self._tracking_status.phase.name
+        tracking_valid = tracking_phase in ("TRACKING", "STARTING")
+        projection_valid = proj.valid if proj else False
+
+        if should_deliver_input:
+            logger.info(
+                f"CURSOR_GATE: frame={frame_id} "
+                f"tracking_state={tracking_phase} "
+                f"tracking_valid={tracking_valid} "
+                f"projection_valid={projection_valid} "
+                f"u={norm_pos[0] if norm_pos else 'N/A'} "
+                f"v={norm_pos[1] if norm_pos else 'N/A'} "
+                f"gate=OPEN "
+                f"backend={backend_type} "
+                f"backend_ok={backend_ok}"
+            )
+
         if not should_deliver_input:
             # Even if we have events, confidence/state might block them
             # Release any held buttons from previous successful operations
-            if any(event.gesture_type in (GestureType.DRAG_START, GestureType.LEFT_CLICK, 
+            if any(event.gesture_type in (GestureType.DRAG_START, GestureType.LEFT_CLICK,
                                         GestureType.RIGHT_CLICK, GestureType.MIDDLE_CLICK)
                    for event in events):
                 self.input_manager.release_all()
+            # Log pipeline failure with structured reason
+            reason = "gate_closed"
+            if self.input_manager and not backend_ok:
+                reason = f"backend_unhealthy: {backend_reason}"
+            elif self._tracking_status.phase == TrackingPhase.LOST:
+                reason = "tracking_lost"
+            elif self._tracking_status.phase == TrackingPhase.STARTING:
+                reason = "tracking_starting"
+            elif self._tracking_status.phase == TrackingPhase.REACQUIRING:
+                reason = "tracking_reacquiring"
+            elif self._tracking_status.phase == TrackingPhase.STABILIZING:
+                reason = "tracking_stabilizing"
+            logger.warning(
+                f"CURSOR_GATE_BLOCKED: frame={frame_id} stage=input_gate reason={reason} "
+                f"tracking_state={tracking_phase} "
+                f"tracking_valid={tracking_valid} "
+                f"u={norm_pos[0] if norm_pos else 'N/A'} "
+                f"v={norm_pos[1] if norm_pos else 'N/A'} "
+                f"proj_valid={projection_valid} "
+                f"backend={backend_type} backend_ok={backend_ok} "
+                f"backend_reason={backend_reason}"
+            )
             return False
 
         # Safe to deliver input - proceed with caution
@@ -1264,16 +1361,41 @@ class AirMouseController:
         # Move cursor if we have relative movement
         if rel_movement and (rel_movement[0] != 0 or rel_movement[1] != 0):
             if not cursor_frozen:
-                self.input_manager.move(rel_movement[0], rel_movement[1])
+                move_ok = self.input_manager.move(rel_movement[0], rel_movement[1])
                 # Update tracked cursor position so the corner-escape
                 # detector (and velocity limiter) see the real cursor.
                 x, y = self._cursor_position
                 self._cursor_position = (x + rel_movement[0], y + rel_movement[1])
                 input_delivered = True
+                # Structured success log
+                screen_x = x + rel_movement[0]
+                screen_y = y + rel_movement[1]
+                logger.info(
+                    f"CURSOR_PIPELINE: frame={frame_id} "
+                    f"u={norm_pos[0] if norm_pos else 'N/A'} "
+                    f"v={norm_pos[1] if norm_pos else 'N/A'} "
+                    f"proj_valid={proj.valid if proj else 'N/A'} "
+                    f"dx={rel_movement[0]} dy={rel_movement[1]} "
+                    f"screen_x={int(screen_x)} screen_y={int(screen_y)} "
+                    f"gate_open=True backend={backend_type} "
+                    f"move_attempted=True backend_result={'success' if move_ok else 'FAIL'}"
+                )
+                if not move_ok:
+                    logger.error(
+                        f"CURSOR_PIPELINE_FAILURE: frame={frame_id} stage=input_backend "
+                        f"reason=move_returned_false backend={backend_type} "
+                        f"backend_reason={backend_reason}"
+                    )
             else:
                 # Cursor frozen - still track position for corner escape
                 x, y = self._cursor_position
                 self._cursor_position = (x + rel_movement[0], y + rel_movement[1])
+                logger.debug(
+                    f"CURSOR_PIPELINE: frame={frame_id} cursor_frozen=True "
+                    f"u={norm_pos[0] if norm_pos else 'N/A'} "
+                    f"v={norm_pos[1] if norm_pos else 'N/A'} "
+                    f"dx={rel_movement[0]} dy={rel_movement[1]}"
+                )
 
         # Process gesture events
         for event in events:

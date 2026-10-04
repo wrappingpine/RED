@@ -264,22 +264,32 @@ class VirtualDisplayPlane:
         u = (point_head[0] + self.width / 2) / self.width
         v = (-point_head[1] + self.height / 2) / self.height
 
-        # Log structured warning if out of bounds (intersection failure clamped to boundary)
-        if u < 0.0 or u > 1.0 or v < 0.0 or v > 1.0:
+        # Policy for boundary excursions:
+        # - Inside plane: valid cursor update
+        # - Slightly outside plane (within EPSILON): reject with warning
+        #   (numerical precision at exact plane edge)
+        # - Far outside plane: reject
+        # - Hand completely lost: tracking_lost
+        EPSILON = 0.08  # 8% of normalized range — allows for numerical precision
+                        # at exact plane edges without accepting gross errors
+        if u < -EPSILON or u > 1.0 + EPSILON or v < -EPSILON or v > 1.0 + EPSILON:
             _rate_logger.warn(
                 "projection_intersection_failed",
                 "event=projection_intersection_failed "
                 f"u={u:.3f} v={v:.3f} "
                 "reason=out_of_bounds "
-                "action=return_raw"
+                "action=return_invalid"
             )
             logger.debug(
-                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - returning raw values"
+                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - marking as invalid"
             )
+            # Return None to indicate invalid projection
+            return None
 
-        # Return raw u/v WITHOUT clamping — the caller decides how to
-        # map out-of-bounds values to screen coordinates.
-        return (float(u), float(v))
+        # Return valid u/v within [0,1] (clamped to boundary for tiny excursions)
+        u_clamped = max(0.0, min(1.0, u))
+        v_clamped = max(0.0, min(1.0, v))
+        return (float(u_clamped), float(v_clamped))
 
     def clamp_to_bounds(self, u: float, v: float) -> Tuple[float, float]:
         """

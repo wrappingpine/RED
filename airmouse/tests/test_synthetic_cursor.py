@@ -153,9 +153,12 @@ class TestSyntheticCursor:
     def test_out_of_bounds_projection_does_not_crash(self):
         """
         Test that projecting with the hand very far from center
-        (beyond the 0.70x0.50 plane) returns valid raw u/v values
-        that are simply out of [0,1] — the caller's responsibility
-        to clamp.
+        (beyond the 0.70x0.50 plane) returns valid=False
+        rather than crashing or returning misleading valid=True.
+
+        Per the projection validity contract: out-of-bounds intersections
+        must NOT masquerade as valid.  The caller (tracking processor)
+        handles this by falling back to the last valid position.
         """
         # Fingertip far to the right and up
         # In head coords this should produce u > 1.0 and v < 0.0
@@ -163,12 +166,13 @@ class TestSyntheticCursor:
         face = create_mock_face()
 
         result = self.projector.project(hand, face)
-        assert result.valid is True
 
-        # u should exceed 1.0 (hand is beyond right edge of plane)
-        assert result.u > 1.0 or abs(result.u - 1.0) < 0.01
-        # v should be below 0 (hand is beyond top edge of plane)
-        assert result.v < 0.0 or abs(result.v) < 0.01
+        # Per the projection validity contract: out-of-bounds is invalid
+        assert result.valid is False, (
+            f"Expected valid=False for out-of-bounds projection, "
+            f"got u={result.u}, v={result.v}"
+        )
+        assert result.error_message is not None
 
     def test_projection_debug_logging(self):
         """Test that projection debug mode can be enabled and emits events."""
