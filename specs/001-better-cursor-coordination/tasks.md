@@ -82,6 +82,28 @@
 - Phase 4 implementation complete (T014-T016)
 - All 200 tests pass (200 passed, 1 skipped)
 
+**GEOMETRY ROOT CAUSE FIX (2026-10-05)**:
+
+The systematic `projection_intersection_failed` log spam (u=0.815 v=1.206, u=-0.310 v=1.367, etc.) was caused by a **dead-code bug** in `_project_in_head_coords` (`airmouse/vision/projection.py`):
+
+```python
+dz_clamped = float(np.clip(dz, -0.2, 1.0))   # computed...
+ray_direction_head = np.array(
+    [dx, dy, self.virtual_plane.distance],    # ...but dz_clamped NEVER used!
+    dtype=np.float32
+)
+```
+
+The ray's Z component was set to `plane_distance` (0.30) instead of the actual `dz` (fingertip depth offset). This meant the ray always traveled straight forward at the plane's depth, so the intersection X/Y equaled `fingertip_head[0]` and `fingertip_head[1]` directly — the full head-space offset. With a 1.0×1.0 plane (±0.5 range), any fingertip offset beyond ±0.5 produced u/v far outside [0,1] (e.g. v=1.396, u=-0.352).
+
+**Fix**: Use the actual `(dx, dy, dz)` offset for the ray direction. The intersection is now scaled by the depth ratio (`plane_distance / dz`), correctly accounting for perspective. A fingertip at 0.5 units right and 0.5 units forward intersects the plane at 0.3 units right (u=0.80), not 0.5 units right (u=1.0).
+
+**Verification**:
+- All 5 canonical positions produce exact expected (u, v): center→(0.5,0.5), left→(0.0,0.5), right→(1.0,0.5), top→(0.5,0.0), bottom→(0.5,1.0)
+- Perspective scaling verified: hand at (0.5, 0, 0.50) → intersection at (0.3, 0, 0.30) → u=0.80 ✓
+- Head-movement invariance preserved: when head rotates but hand stays fixed relative to head, (dx, dy, dz) in head space is unchanged
+- MediaPipe IMAGE_DIMENSIONS warning fixed by setting `mp_image.image_dimensions` explicitly
+
 ---
 
 ## Phase 5: User Story 3 - Smooth Cursor with One Euro Filter on Plane Coordinates (Priority: P1)

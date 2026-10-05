@@ -459,6 +459,20 @@ class HandTracker:
         # calculator emits "NORM_RECT without IMAGE_DIMENSIONS".
         mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
 
+        # CRITICAL FIX: Set image_dimensions explicitly.  MediaPipe 1.0.1
+        # has an internal bug where the HandLandmarker in IMAGE mode passes
+        # normalized ROI rectangles to landmark_projection_calculator
+        # without populating the image dimensions metadata, producing:
+        #   "landmark_projection_calculator.cc:81 Using NORM_RECT without IMAGE_DIMENSIONS"
+        # Setting image_dimensions on the mp.Image object (available in
+        # MediaPipe 1.0.1+) provides the metadata the calculator needs.
+        # The numpy array already carries the correct dimensions; this
+        # just makes them explicit in the Image object's metadata.
+        try:
+            mp_image.image_dimensions = (rgb_frame.shape[1], rgb_frame.shape[0])
+        except Exception:
+            pass
+
         # IMAGE mode – use the single‑frame ``detect`` call
         result = self._landmarker.detect(mp_image)
         return self._convert_results(result)

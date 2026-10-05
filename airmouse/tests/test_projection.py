@@ -134,7 +134,7 @@ class TestHandProjector:
         """Set up common test fixtures."""
         face = create_mock_face()
         self.head_coords = HeadCoordinateSystem.from_face(face)
-        self.plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50, head_coords=self.head_coords)
+        self.plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0, head_coords=self.head_coords)
         self.projector = HandProjector(
             virtual_plane=self.plane,
             head_coords=self.head_coords,
@@ -347,7 +347,7 @@ class TestHandProjector:
 
         # Recreate head_coords from rotated face
         head_coords_rotated = HeadCoordinateSystem.from_face(face_rotated)
-        plane_rotated = VirtualDisplayPlane(distance=0.30, width=0.40, height=0.25, head_coords=head_coords_rotated)
+        plane_rotated = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0, head_coords=head_coords_rotated)
         projector_rotated = HandProjector(
             virtual_plane=plane_rotated,
             head_coords=head_coords_rotated,
@@ -363,14 +363,30 @@ class TestHandProjector:
         assert abs(v1 - v2) < 0.02, f"Head movement invariance failed: v changed from {v1:.3f} to {v2:.3f}"
 
     def test_head_movement_invariance_edges(self):
-        """Test head-movement invariance at edges of virtual plane."""
+        """Test head-movement invariance at edges of virtual plane.
+
+        The fingertip is placed at plane corners in HEAD space
+        (not camera space), so the hand is at the plane surface.
+        When the head rotates but the hand stays fixed relative to
+        the head, the normalized coordinates must be invariant.
+        """
         face = create_mock_face()
-        # Hand at top-left corner of plane in head coords
-        # Plane is 0.70m wide x 0.50m high, at 0.3m distance
-        # Corners in head coords: (±0.35, ±0.25, -0.3)
+        hc = HeadCoordinateSystem.from_face(face)
+
+        # Fingertip at top-left corner of plane in HEAD coords.
+        # Plane is 1.0 wide x 1.0 high at z=0.30.
+        # Corner in head coords: (-0.5, 0.5, 0.30)
+        # Convert to camera coords: p_cam = origin + x*right + y*up + z*forward
+        # origin=(0.5,0.5,-0.1), right=(1,0,0), up=(0,-1,0), forward=(0,0,-1)
+        # p_cam = (0.5-0.5, 0.5-0.5, -0.1-0.30) = (0.0, 0.0, -0.40)
+        fingertip_cam = hc.head_to_camera(
+            np.array([-0.5, 0.5, 0.30], dtype=np.float32)
+        )
         hand = Hand(
             landmarks=[
-                Landmark(-0.35, 0.25, -0.3, 1.0) if i == 8 else Landmark(0.0, 0.0, 0.0, 1.0)
+                Landmark(float(fingertip_cam[0]), float(fingertip_cam[1]),
+                         float(fingertip_cam[2]), 1.0) if i == 8
+                else Landmark(0.0, 0.0, 0.0, 1.0)
                 for i in range(21)
             ],
             confidence=1.0,
@@ -378,49 +394,52 @@ class TestHandProjector:
         )
 
         result1 = self.projector.project(hand, face)
-        assert result1.valid is True
+        assert result1.valid is True, f"Projection failed: {result1.error_message}"
         u1, v1 = result1.u, result1.v
+        # Top-left corner: u=0.0 (left), v=0.0 (top)
+        assert abs(u1 - 0.0) < 0.02, f"u={u1:.3f}, expected 0.0"
+        assert abs(v1 - 0.0) < 0.02, f"v={v1:.3f}, expected 0.0"
 
-        # Rotate head 10 degrees down (pitch)
-        pitch_rad = np.deg2rad(10)
-        cos_p, sin_p = np.cos(pitch_rad), np.sin(pitch_rad)
+        # Rotate head 10 degrees down (pitch).  The hand stays fixed
+        # relative to the head, so we transform the same head-space
+        # point through the new head coordinate system.
+        face_rotated = create_mock_face_rotated_pitch(10)
+        hc_rotated = HeadCoordinateSystem.from_face(face_rotated)
 
-        # Hand moves with head in camera coords
-        # Original: (-0.35, 0.25, -0.3) in head coords
-        # After pitch: x' = x, y' = y*cos - z*sin, z' = y*sin + z*cos
-        y_new = 0.25 * cos_p - (-0.3) * sin_p
-        z_new = 0.25 * sin_p + (-0.3) * cos_p
+        # Same hand position in head space, transformed to new camera coords
+        fingertip_cam_rotated = hc_rotated.head_to_camera(
+            np.array([-0.5, 0.5, 0.30], dtype=np.float32)
+        )
         hand_moved = Hand(
             landmarks=[
-                Landmark(-0.35, y_new, z_new, 1.0) if i == 8 else Landmark(0.0, 0.0, 0.0, 1.0)
+                Landmark(float(fingertip_cam_rotated[0]),
+                         float(fingertip_cam_rotated[1]),
+                         float(fingertip_cam_rotated[2]), 1.0) if i == 8
+                else Landmark(0.0, 0.0, 0.0, 1.0)
                 for i in range(21)
             ],
             confidence=1.0,
             handedness="Right"
         )
 
-        # Face rotated by same pitch
-        face_rotated = create_mock_face_rotated_pitch(10)
-
-        head_coords_rotated = HeadCoordinateSystem.from_face(face_rotated)
-        plane_rotated = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50, head_coords=head_coords_rotated)
+        plane_rotated = VirtualDisplayPlane(
+            distance=0.30, width=1.0, height=1.0,
+            head_coords=hc_rotated
+        )
         projector_rotated = HandProjector(
             virtual_plane=plane_rotated,
-            head_coords=head_coords_rotated,
+            head_coords=hc_rotated,
             use_head_coords_for_ray=True
         )
 
         result2 = projector_rotated.project(hand_moved, face_rotated)
-        assert result2.valid is True
+        assert result2.valid is True, f"Projection failed: {result2.error_message}"
         u2, v2 = result2.u, result2.v
 
         # Head-movement invariance: the hand stays fixed relative to the
         # head, so the normalized coordinates should be consistent.
-        # At plane edges the ray-plane intersection is more sensitive to
-        # numerical error, so we use a slightly larger tolerance (0.08
-        # vs 0.02 for interior points).
-        assert abs(u1 - u2) < 0.08, f"Head movement invariance failed: u changed from {u1:.3f} to {u2:.3f}"
-        assert abs(v1 - v2) < 0.08, f"Head movement invariance failed: v changed from {v1:.3f} to {v2:.3f}"
+        assert abs(u1 - u2) < 0.02, f"Head movement invariance failed: u changed from {u1:.3f} to {u2:.3f}"
+        assert abs(v1 - v2) < 0.02, f"Head movement invariance failed: v changed from {v1:.3f} to {v2:.3f}"
 
     def test_projection_only_mode_synthetic(self):
         """Test projection-only mode: bypass camera, feed synthetic landmarks, verify u,v coordinates."""
@@ -439,14 +458,14 @@ class TestHandProjector:
             # Normalized: u=0 left, u=1 right; v=0 top, v=1 bottom
             # Head coords: +X right, +Y up, +Z forward
             # v=0 (TOP) = head Y+ (UP); v=1 (BOTTOM) = head Y- (DOWN)
-            # Plane is 0.70m wide x 0.50m high at 0.30m distance
+            # Plane is 1.0 wide x 1.0 high at 0.30 distance (normalized units)
             (0.0, 0.0, 0.3, 0.5, 0.5, "center"),
-            (-0.35, 0.0, 0.3, 0.0, 0.5, "left edge"),
-            (0.35, 0.0, 0.3, 1.0, 0.5, "right edge"),
-            (0.0, 0.25, 0.3, 0.5, 0.0, "top edge"),      # head Y+ = UP → v=0 (TOP)
-            (0.0, -0.25, 0.3, 0.5, 1.0, "bottom edge"),   # head Y- = DOWN → v=1 (BOTTOM)
-            (-0.175, 0.125, 0.3, 0.25, 0.25, "quarter positions"),  # head Y+ → v=0.25
-            (0.175, -0.125, 0.3, 0.75, 0.75, "three-quarter positions"),  # head Y- → v=0.75
+            (-0.5, 0.0, 0.3, 0.0, 0.5, "left edge"),
+            (0.5, 0.0, 0.3, 1.0, 0.5, "right edge"),
+            (0.0, 0.5, 0.3, 0.5, 0.0, "top edge"),       # head Y+ = UP → v=0 (TOP)
+            (0.0, -0.5, 0.3, 0.5, 1.0, "bottom edge"),   # head Y- = DOWN → v=1 (BOTTOM)
+            (-0.25, 0.25, 0.3, 0.25, 0.25, "quarter positions"),  # head Y+ → v=0.25
+            (0.25, -0.25, 0.3, 0.75, 0.75, "three-quarter positions"),  # head Y- → v=0.75
         ]
 
         for head_x, head_y, head_z, expected_u, expected_v, desc in test_positions:
@@ -556,7 +575,7 @@ class TestHandProjector:
         # Create projector with invalid head_coords
         from airmouse.vision.head_coords import HeadCoordinateSystem
         bad_head_coords = HeadCoordinateSystem(_valid=False)
-        bad_plane = VirtualDisplayPlane(distance=0.30, width=0.40, height=0.25, head_coords=bad_head_coords)
+        bad_plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0, head_coords=bad_head_coords)
         bad_projector = HandProjector(
             virtual_plane=bad_plane,
             head_coords=bad_head_coords,
@@ -604,6 +623,213 @@ class TestHandProjector:
         # Position should be same as before (head-relative invariance)
         assert abs(u1 - u2) < 0.02
         assert abs(v1 - v2) < 0.02
+
+
+class TestProjectionSelfTest:
+    """
+    Deterministic self-test for projection mathematics using synthetic rays.
+
+    Verifies the projection equations in isolation from MediaPipe:
+    - Ray construction: origin + t * direction
+    - Ray-plane intersection: t = (distance - origin.z) / direction.z
+    - Orthonormal basis: plane_right, plane_up, plane_normal
+    - Coordinate mapping: center=(0.5, 0.5), left=(0.0, 0.5), right=(1.0, 0.5),
+      top=(0.5, 0.0), bottom=(0.5, 1.0)
+    - Monotonicity: moving along each axis produces monotonic change in u/v
+    - Out-of-bounds: invalid projections return valid=False without clamping
+    """
+
+    def setup_method(self):
+        """Set up standard 1.0x1.0 plane at distance=0.30."""
+        face = create_mock_face()
+        self.head_coords = HeadCoordinateSystem.from_face(face)
+        self.plane = VirtualDisplayPlane(
+            distance=0.30,
+            width=1.0,
+            height=1.0,
+            head_coords=self.head_coords
+        )
+        self.projector = HandProjector(
+            virtual_plane=self.plane,
+            head_coords=self.head_coords,
+            use_head_coords_for_ray=True
+        )
+
+    def test_orthonormal_basis(self):
+        """Verify plane basis vectors are orthonormal."""
+        center = self.plane.get_plane_center_camera()
+        normal = self.plane.get_plane_normal_camera()
+        x_axis, y_axis = self.plane.get_plane_axes_camera()
+
+        assert center is not None
+        assert normal is not None
+        assert x_axis is not None
+        assert y_axis is not None
+
+        # Unit length
+        assert abs(np.linalg.norm(normal) - 1.0) < 1e-4
+        assert abs(np.linalg.norm(x_axis) - 1.0) < 1e-4
+        assert abs(np.linalg.norm(y_axis) - 1.0) < 1e-4
+
+        # Orthogonal
+        assert abs(np.dot(x_axis, y_axis)) < 1e-4
+        assert abs(np.dot(x_axis, normal)) < 1e-4
+        assert abs(np.dot(y_axis, normal)) < 1e-4
+
+    def test_cardinal_points(self):
+        """Verify the 5 canonical points map to exact expected (u, v)."""
+        # In head coords with no rotation:
+        # eye at (0, 0, 0)
+        # Plane at z = 0.30, width = 1.0, height = 1.0
+        # X range: [-0.5, 0.5], Y range: [-0.5, 0.5]
+        #
+        # Mapping:
+        # u = (x + 0.5) / 1.0  → x = u - 0.5
+        # v = (-y + 0.5) / 1.0 → y = 0.5 - v (Y inverted: up is v=0, down is v=1)
+        expected = [
+            # (name, head_x, head_y, expected_u, expected_v)
+            ("center", 0.0, 0.0, 0.5, 0.5),
+            ("left", -0.5, 0.0, 0.0, 0.5),
+            ("right", 0.5, 0.0, 1.0, 0.5),
+            ("top", 0.0, 0.5, 0.5, 0.0),       # head Y+ = UP → screen TOP (v=0)
+            ("bottom", 0.0, -0.5, 0.5, 1.0),   # head Y- = DOWN → screen BOTTOM (v=1)
+        ]
+
+        face = create_mock_face()
+        for name, hx, hy, eu, ev in expected:
+            # Convert head coords to camera coords (no rotation)
+            # eye_midpoint is at (0, 0, -0.1) in camera coords
+            # forward=(0,0,-1), up=(0,-1,0), right=(1,0,0) in camera coords
+            cam_x = hx
+            cam_y = -hy      # head Y+ (up) = camera Y- (up in image)
+            cam_z = -0.1 - 0.30  # head Z+ (forward) = camera -Z
+
+            hand = Hand(
+                landmarks=[
+                    Landmark(cam_x, cam_y, cam_z, 1.0) if i == 8 else Landmark(0.0, 0.0, 0.0, 1.0)
+                    for i in range(21)
+                ],
+                confidence=1.0,
+                handedness="Right"
+            )
+
+            result = self.projector.project(hand, face)
+            assert result.valid is True, f"Failed for {name}"
+            assert abs(result.u - eu) < 1e-3, f"{name}: u={result.u:.4f} != {eu}"
+            assert abs(result.v - ev) < 1e-3, f"{name}: v={result.v:.4f} != {ev}"
+
+    def test_horizontal_monotonicity(self):
+        """Verify moving hand left-to-right produces monotonically increasing u."""
+        face = create_mock_face()
+        prev_u = -1.0
+
+        for hx in np.linspace(-0.4, 0.4, 9):
+            cam_x = hx
+            cam_y = 0.0
+            cam_z = -0.1 - 0.30
+
+            hand = Hand(
+                landmarks=[
+                    Landmark(cam_x, cam_y, cam_z, 1.0) if i == 8 else Landmark(0.0, 0.0, 0.0, 1.0)
+                    for i in range(21)
+                ],
+                confidence=1.0,
+                handedness="Right"
+            )
+
+            result = self.projector.project(hand, face)
+            assert result.valid is True
+            assert result.u > prev_u, f"Monotonicity failed at hx={hx}: u={result.u} <= prev={prev_u}"
+            prev_u = result.u
+
+    def test_vertical_monotonicity(self):
+        """Verify moving hand up-to-down produces monotonically increasing v (screen down)."""
+        face = create_mock_face()
+        prev_v = -1.0
+
+        # Move from head Y+ (up) to head Y- (down)
+        # Should produce increasing v (0=top to 1=bottom)
+        for hy in np.linspace(0.4, -0.4, 9):
+            cam_x = 0.0
+            cam_y = -hy  # head Y+ = camera Y-
+            cam_z = -0.1 - 0.30
+
+            hand = Hand(
+                landmarks=[
+                    Landmark(cam_x, cam_y, cam_z, 1.0) if i == 8 else Landmark(0.0, 0.0, 0.0, 1.0)
+                    for i in range(21)
+                ],
+                confidence=1.0,
+                handedness="Right"
+            )
+
+            result = self.projector.project(hand, face)
+            assert result.valid is True
+            assert result.v > prev_v, f"Monotonicity failed at hy={hy}: v={result.v} <= prev={prev_v}"
+            prev_v = result.v
+
+    def test_ray_parallel_to_plane(self):
+        """Verify parallel ray (denom ≈ 0) returns None/invalid without crashing."""
+        ray_origin = np.array([0.0, 0.0, -0.1], dtype=np.float32)
+        # Ray direction perpendicular to normal (parallel to plane)
+        # Plane normal is (0, 0, -1) in head coords → (0, 0, 1) in camera coords
+        # Parallel direction: (1, 0, 0)
+        ray_dir = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+
+        intersection = self.plane.ray_plane_intersection(ray_origin, ray_dir)
+        assert intersection is None
+
+    def test_ray_pointing_away(self):
+        """Verify ray pointing away from plane (t < 0) returns None/invalid."""
+        ray_origin = np.array([0.0, 0.0, -0.1], dtype=np.float32)
+        # Ray pointing backwards (away from plane at -Z)
+        ray_dir = np.array([0.0, 0.0, 1.0], dtype=np.float32)
+
+        intersection = self.plane.ray_plane_intersection(ray_origin, ray_dir)
+        assert intersection is None
+
+    def test_out_of_bounds_rejection(self):
+        """Verify points far outside plane are rejected (valid=False) without silent clamping."""
+        face = create_mock_face()
+
+        # Hand far to the right (head_x = 1.0, well beyond half-width 0.5)
+        # u = (1.0 + 0.5) / 1.0 = 1.5 → outside [0, 1] + EPSILON
+        cam_x = 1.0
+        cam_y = 0.0
+        cam_z = -0.1 - 0.30
+
+        hand = Hand(
+            landmarks=[
+                Landmark(cam_x, cam_y, cam_z, 1.0) if i == 8 else Landmark(0.0, 0.0, 0.0, 1.0)
+                for i in range(21)
+            ],
+            confidence=1.0,
+            handedness="Right"
+        )
+
+        result = self.projector.project(hand, face)
+        assert result.valid is False
+        assert "normalized" in result.error_message.lower() or "bounds" in result.error_message.lower() or not result.valid
+
+    def test_plane_dimensions_configurable(self):
+        """Verify plane width/height can be reconfigured."""
+        custom_plane = VirtualDisplayPlane(
+            distance=0.40,
+            width=1.2,
+            height=0.8,
+            head_coords=self.head_coords
+        )
+        assert custom_plane.distance == 0.40
+        assert custom_plane.width == 1.2
+        assert custom_plane.height == 0.8
+
+        # Test mapping with custom dimensions
+        # Center should still be (0.5, 0.5)
+        pt_cam = custom_plane.normalized_to_point_camera(0.5, 0.5)
+        norm = custom_plane.point_to_normalized(pt_cam)
+        assert norm is not None
+        assert abs(norm[0] - 0.5) < 1e-3
+        assert abs(norm[1] - 0.5) < 1e-3
 
 
 if __name__ == "__main__":

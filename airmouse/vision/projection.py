@@ -435,40 +435,40 @@ class HandProjector:
         dy = fingertip_head[1] - eye_midpoint_head[1]
         dz = fingertip_head[2] - eye_midpoint_head[2]
 
-        # Constrain the Z (depth) offset to a plausible range.
-        # MediaPipe hand Z values are relative depth estimates that can
-        # be noisy.  A fingertip is typically within arm's reach — the
-        # head-space Z offset from eye to fingertip should be within
-        # [0, 1.0] normalized units (0 to ~1m at typical distances).
-        # Clamping extreme Z values prevents the rotation cross-coupling
-        # from injecting large errors into the X/Y results.
-        dz_clamped = float(np.clip(dz, -0.2, 1.0))
-
-        # Build the ray direction using the plane distance as the forward
-        # (Z) component.  This places the ray-plane intersection exactly at
-        # the fingertip's head-space (X, Y) on the plane surface at
-        # z=+distance, giving a clean 1:1 mapping between the image-plane
-        # position of the fingertip and the normalized cursor coordinates.
+        # Build the ray direction using the ACTUAL head-space offset
+        # (dx, dy, dz), NOT a fixed Z=plane_distance.
         #
-        # Using plane_distance (rather than a unit Z=1) means the
-        # intersection point is (dx, dy, distance) in head coords — the
-        # fingertip's angular position projected straight forward onto the
-        # plane.  This is the standard HMD pointing model and preserves
-        # head-movement invariance: when the head rotates but the hand stays
-        # fixed relative to the head, (dx, dy) is unchanged, so the
-        # intersection and the normalized (u, v) are unchanged too.
+        # CRITICAL FIX: The previous code computed dz_clamped but then
+        # discarded it, setting ray_direction_head[2] = plane_distance
+        # (0.30) instead.  This meant the ray always traveled straight
+        # forward at the plane's depth, so the intersection X/Y equaled
+        # fingertip_head[0] and fingertip_head[1] directly — the full
+        # head-space offset.  With a 1.0×1.0 plane (±0.5 range), any
+        # fingertip offset beyond ±0.5 produced u/v far outside [0,1]
+        # (e.g. v=1.396, u=-0.352).
+        #
+        # Using the real dz component means the ray travels from the eye
+        # through the actual fingertip position.  The intersection is
+        # scaled by the depth ratio (plane_distance / dz), so a fingertip
+        # at 0.4 units forward and 0.5 units right intersects the plane
+        # at 0.375 units right — correctly accounting for perspective.
+        #
+        # Head-movement invariance is preserved: when the head rotates
+        # but the hand stays fixed relative to the head, (dx, dy, dz)
+        # in head space is unchanged, so the ray direction and the
+        # intersection are unchanged too.
         ray_direction_head = np.array(
-            [dx, dy, self.virtual_plane.distance], dtype=np.float32
+            [dx, dy, dz], dtype=np.float32
         )
         ray_norm = np.linalg.norm(ray_direction_head)
 
         if ray_norm < 1e-6:
-            # Fingertip is exactly at the eye midpoint in image-plane
-            # projection — use a straight-forward ray.
+            # Fingertip is exactly at the eye midpoint — use a
+            # straight-forward ray.
             ray_direction_head = np.array(
-                [0.0, 0.0, self.virtual_plane.distance], dtype=np.float32
+                [0.0, 0.0, 1.0], dtype=np.float32
             )
-            ray_norm = self.virtual_plane.distance
+            ray_norm = 1.0
 
         ray_direction_head = ray_direction_head / ray_norm
 
@@ -506,7 +506,7 @@ class HandProjector:
             eye_head_z=float(eye_midpoint_head[2]),
             fingertip_head_x=float(fingertip_head[0]), fingertip_head_y=float(fingertip_head[1]),
             fingertip_head_z=float(fingertip_head[2]),
-            dz_raw=float(dz), dz_clamped=float(dz_clamped),
+            dx=float(dx), dy=float(dy), dz=float(dz),
             ray_dir_x=float(ray_direction_head[0]), ray_dir_y=float(ray_direction_head[1]),
             ray_dir_z=float(ray_direction_head[2]),
             plane_normal_x=float(self.virtual_plane._plane_normal_cam[0]) if self.virtual_plane._plane_normal_cam is not None else 0.0,
@@ -679,19 +679,22 @@ class HandProjector:
         if self.use_head_coords_for_ray:
             eye_head = hc.camera_to_head(eye_cam)
             fingertip_head = hc.camera_to_head(fingertip_cam)
-            # Use image-plane X/Y for the ray direction with the plane
-            # distance as the forward Z (see _project_in_head_coords).
+            # Use the ACTUAL head-space offset (dx, dy, dz) for the
+            # ray direction.  See _project_in_head_coords for the
+            # rationale — using a fixed Z=plane_distance discards the
+            # real depth component and produces out-of-bounds u/v.
             dx = fingertip_head[0] - eye_head[0]
             dy = fingertip_head[1] - eye_head[1]
+            dz = fingertip_head[2] - eye_head[2]
             ray_dir_head = np.array(
-                [dx, dy, self.virtual_plane.distance], dtype=np.float32
+                [dx, dy, dz], dtype=np.float32
             )
             ray_norm = np.linalg.norm(ray_dir_head)
             if ray_norm < 1e-6:
                 ray_dir_head = np.array(
-                    [0.0, 0.0, self.virtual_plane.distance], dtype=np.float32
+                    [0.0, 0.0, 1.0], dtype=np.float32
                 )
-                ray_norm = self.virtual_plane.distance
+                ray_norm = 1.0
             ray_dir_head = ray_dir_head / ray_norm
 
             intersection_head = self.virtual_plane.ray_plane_intersection_head(eye_head, ray_dir_head)
