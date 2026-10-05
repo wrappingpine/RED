@@ -82,9 +82,9 @@ class TrackingConfig:
     confidence_threshold: float = 0.75
     min_face_confidence: float = 0.5
     use_head_relative: bool = True
-    virtual_plane_distance: float = 0.30  # positive Z in head coords (30cm in front)
-    virtual_plane_width: float = 0.70     # meters - covers full hand range
-    virtual_plane_height: float = 0.50    # meters - covers full hand range
+    virtual_plane_distance: float = 0.30  # forward in head coords (Z, doesn't affect u/v)
+    virtual_plane_width: float = 1.0     # normalized units: covers full ±0.5 range
+    virtual_plane_height: float = 1.0    # normalized units: covers full ±0.5 range
 
 
 @dataclass

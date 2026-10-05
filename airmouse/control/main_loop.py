@@ -486,6 +486,37 @@ class AirMouseController:
             health_results['input'] = f'OK: {backend_type} ({desktop_env})'
 
             logger.info("All components initialized successfully")
+
+            # Print calibration diagnostic at startup
+            if self.tracking_processor and hasattr(self.tracking_processor, 'virtual_plane'):
+                try:
+                    diag = self.tracking_processor.virtual_plane.calibration_diagnostic()
+                    logger.info(f"=== VIRTUAL PLANE CALIBRATION ===")
+                    logger.info(f"  Plane: distance={diag['plane']['distance']}m, "
+                                f"size={diag['plane']['width']}x{diag['plane']['height']} "
+                                f"(aspect={diag['plane']['aspect_ratio']:.2f})")
+                    logger.info(f"  Coordinate convention: {diag['coordinate_convention']['u_axis']}, "
+                                f"{diag['coordinate_convention']['v_axis']}")
+                    logger.info(f"  Expected mapping: center=({diag['expected_mapping']['center']['u']}, "
+                                f"{diag['expected_mapping']['center']['v']}), "
+                                f"left=({diag['expected_mapping']['left_edge']['u']}, "
+                                f"{diag['expected_mapping']['left_edge']['v']}), "
+                                f"right=({diag['expected_mapping']['right_edge']['u']}, "
+                                f"{diag['expected_mapping']['right_edge']['v']}), "
+                                f"top=({diag['expected_mapping']['top_edge']['u']}, "
+                                f"{diag['expected_mapping']['top_edge']['v']}), "
+                                f"bottom=({diag['expected_mapping']['bottom_edge']['u']}, "
+                                f"{diag['expected_mapping']['bottom_edge']['v']})")
+                    if diag.get('basis_valid'):
+                        logger.info(f"  Basis valid: {diag['basis_orthonormal']}")
+                        if not diag['basis_orthonormal']:
+                            logger.warning(f"  Basis dots: {diag.get('basis_dots', {})}")
+                    else:
+                        logger.warning("  Basis not valid (no head coordinates)")
+                    logger.info(f"=== END CALIBRATION ===")
+                except Exception as e:
+                    logger.debug(f"Calibration diagnostic failed: {e}")
+
             self._set_status("initialized", {
                 "screen": (screen_width, screen_height),
                 "input_backend": backend_type,
@@ -1235,6 +1266,20 @@ class AirMouseController:
             if frame_data.frame is not None:
                 h, w = frame_data.frame.shape[:2]
                 self.performance_monitor.update_landmarks(hands, w, h)
+
+        # Draw projection debug overlay showing plane axes, ray, and intersection
+        if (self._debug_overlay_enabled and self.tracking_processor and
+            hasattr(self.tracking_processor, 'get_projection_debug_overlay') and
+            frame_data.frame is not None):
+            try:
+                h, w = frame_data.frame.shape[:2]
+                overlay = self.tracking_processor.get_projection_debug_overlay(w, h)
+                if overlay is not None:
+                    # Blend overlay with original frame
+                    mask = (overlay.sum(axis=2) > 0)
+                    frame_data.frame[mask] = overlay[mask]
+            except Exception as e:
+                logger.debug(f"Projection debug overlay failed: {e}")
 
         # Update tracking state
         active_gestures = [e.gesture_type.value for e in events] if events else []

@@ -225,6 +225,7 @@ class GestureState:
         # Full gesture phase machine per §31
         self.left_pinch_phase = GesturePhaseState()
         self.right_pinch_phase = GesturePhaseState()
+        self.middle_pinch_phase = GesturePhaseState()
         self.fist_phase = GesturePhaseState()
         self.scroll_phase = GesturePhaseState()
         self.open_palm_phase = GesturePhaseState()
@@ -237,6 +238,8 @@ class GestureState:
         self.thumb_gesture_start_time = 0.0
         self.two_hand_gesture_active = False
         self._middle_pinch_active = False
+        self._middle_pinch_confirmed = False
+        self._middle_pinch_start_time = 0.0
 
         # Clutch / Hand Repositioning (§55)
         self.clutch_active = False
@@ -263,6 +266,8 @@ class GestureState:
         self.last_gesture_time = 0.0
         self.last_gesture_type = GestureType.NONE
         self.last_hand_count = 0
+        self.last_middle_click_time = 0.0
+        self.middle_click_cooldown = 0.5  # 500ms cooldown between middle clicks
 
     def reset(self):
         """Reset all state."""
@@ -513,18 +518,41 @@ class GestureRecognizer:
         if primary_hand.is_scroll_gesture():
             self._process_scroll(primary_hand, current_time, events)
 
-        # Check middle click (thumb + ring pinch)
+        # Check middle click (thumb + ring pinch) with hysteresis
         middle_pinch_dist = primary_hand.pinch_distance("thumb", "ring")
-        if middle_pinch_dist < self.config.pinch_enter_threshold:
-            if not hasattr(self.state, '_middle_pinch_active') or not self._state._middle_pinch_active:
+        middle_pinch_condition = middle_pinch_dist < self.config.pinch_enter_threshold
+        
+        # Update phase machine for middle pinch (§31)
+        self._update_phase(self._state.middle_pinch_phase, middle_pinch_condition, current_time)
+        
+        if not self._state._middle_pinch_active:
+            # Check enter threshold
+            if middle_pinch_dist < self.config.pinch_enter_threshold:
                 self._state._middle_pinch_active = True
-                events.append(GestureEvent(
-                    gesture_type=GestureType.MIDDLE_CLICK,
-                    hand=primary_hand,
-                    timestamp=current_time
-                ))
+                self._state._middle_pinch_confirmed = False
+                self._state._middle_pinch_start_time = current_time
         else:
-            self._state._middle_pinch_active = False
+            # Pinch active - check confirm/release
+            if not self._state._middle_pinch_confirmed:
+                # Waiting for confirmation
+                if middle_pinch_dist < self.config.pinch_confirm_threshold:
+                    # Check cooldown before confirming
+                    time_since_last_click = current_time - self._state.last_middle_click_time
+                    if time_since_last_click >= self._state.middle_click_cooldown:
+                        self._state._middle_pinch_confirmed = True
+                        self._state.last_middle_click_time = current_time
+                        # Emit MIDDLE_CLICK event on confirmation (not on enter)
+                        events.append(GestureEvent(
+                            gesture_type=GestureType.MIDDLE_CLICK,
+                            hand=primary_hand,
+                            timestamp=current_time
+                        ))
+            else:
+                # Confirmed - check release
+                if middle_pinch_dist > self.config.pinch_release_threshold:
+                    # Release pinch - reset state
+                    self._state._middle_pinch_active = False
+                    self._state._middle_pinch_confirmed = False
 
         # Check open palm (all fingers extended) - §30.5
         if primary_hand.is_open_palm():

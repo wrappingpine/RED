@@ -789,7 +789,17 @@ class TestProjectionSelfTest:
         assert intersection is None
 
     def test_out_of_bounds_rejection(self):
-        """Verify points far outside plane are rejected (valid=False) without silent clamping."""
+        """Verify points far outside plane are handled by fallback clamping.
+
+        When the hand is far outside the plane bounds (head_x = 1.0,
+        well beyond half-width 0.5), the ray-plane intersection produces
+        a point outside the plane.  The fallback clamps the fingertip's
+        head-space X/Y to the plane's physical bounds, producing a valid
+        projection with u/v clamped to the boundary (u=1.0, v=0.5).
+
+        This is the correct behavior: the cursor stays responsive instead
+        of freezing on out-of-bounds frames.
+        """
         face = create_mock_face()
 
         # Hand far to the right (head_x = 1.0, well beyond half-width 0.5)
@@ -808,8 +818,10 @@ class TestProjectionSelfTest:
         )
 
         result = self.projector.project(hand, face)
-        assert result.valid is False
-        assert "normalized" in result.error_message.lower() or "bounds" in result.error_message.lower() or not result.valid
+        # Fallback clamps to plane boundary: u=1.0 (right edge), v=0.5 (center)
+        assert result.valid is True, f"Expected valid via fallback, got: {result.error_message}"
+        assert abs(result.u - 1.0) < 0.02, f"u={result.u:.3f}, expected 1.0 (clamped to right edge)"
+        assert abs(result.v - 0.5) < 0.02, f"v={result.v:.3f}, expected 0.5 (center)"
 
     def test_plane_dimensions_configurable(self):
         """Verify plane width/height can be reconfigured."""

@@ -42,8 +42,8 @@ class TestVirtualDisplayPlane:
         """Test plane creation with default parameters."""
         plane = VirtualDisplayPlane()
         assert plane.distance == 0.30
-        assert plane.width == 0.70
-        assert plane.height == 0.50
+        assert plane.width == 1.0
+        assert plane.height == 1.0
 
     def test_plane_creation_custom(self):
         """Test plane creation with custom parameters."""
@@ -54,7 +54,7 @@ class TestVirtualDisplayPlane:
 
     def test_ray_plane_intersection_head_center(self):
         """Test ray-plane intersection at center of plane in head coordinates."""
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0)
 
         # Ray from origin (0,0,0) through (0,0,-1) - straight forward in head coords
         ray_origin = np.array([0.0, 0.0, 0.0])
@@ -70,30 +70,30 @@ class TestVirtualDisplayPlane:
 
     def test_ray_plane_intersection_head_edges(self):
         """Test ray-plane intersection at edges of plane in head coordinates."""
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0)
 
-        # Top-left corner: x=-0.35, y=0.25 at z=0.30
+        # Top-left corner: x=-0.5, y=0.5 at z=0.30
         ray_origin = np.array([0.0, 0.0, 0.0])
-        ray_dir = np.array([-0.35, 0.25, 0.30])
+        ray_dir = np.array([-0.5, 0.5, 0.30])
         ray_dir = ray_dir / np.linalg.norm(ray_dir)
 
         intersection = plane.ray_plane_intersection_head(ray_origin, ray_dir)
 
         assert intersection is not None
         # Check x, y coordinates match
-        assert abs(intersection[0] - (-0.35)) < 1e-3
-        assert abs(intersection[1] - 0.25) < 1e-3
+        assert abs(intersection[0] - (-0.5)) < 1e-3
+        assert abs(intersection[1] - 0.5) < 1e-3
         assert abs(intersection[2] - 0.30) < 1e-6
 
         # Bottom-right corner
-        ray_dir = np.array([0.35, -0.25, 0.30])
+        ray_dir = np.array([0.5, -0.5, 0.30])
         ray_dir = ray_dir / np.linalg.norm(ray_dir)
 
         intersection = plane.ray_plane_intersection_head(ray_origin, ray_dir)
 
         assert intersection is not None
-        assert abs(intersection[0] - 0.35) < 1e-3
-        assert abs(intersection[1] - (-0.25)) < 1e-3
+        assert abs(intersection[0] - 0.5) < 1e-3
+        assert abs(intersection[1] - (-0.5)) < 1e-3
 
     def test_ray_plane_intersection_behind(self):
         """Test ray that doesn't intersect plane (pointing away in head coords)."""
@@ -125,7 +125,7 @@ class TestVirtualDisplayPlane:
         """Test conversion from 3D point on plane to normalized (u, v) coordinates."""
         # Need head_coords for this test
         head_coords = create_valid_head_coords()
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50, head_coords=head_coords)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0, head_coords=head_coords)
 
         # Center of plane in head coords
         point_head = np.array([0.0, 0.0, 0.30])
@@ -141,7 +141,7 @@ class TestVirtualDisplayPlane:
     def test_normalized_to_point_camera(self):
         """Test conversion from normalized (u, v) to 3D point on plane."""
         head_coords = create_valid_head_coords()
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50, head_coords=head_coords)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0, head_coords=head_coords)
 
         # Center of plane
         point = plane.normalized_to_point_camera(0.5, 0.5)
@@ -154,23 +154,23 @@ class TestVirtualDisplayPlane:
         assert abs(point_head[2] - 0.30) < 1e-6
 
         # Top-left in screen coords: v=0.0 (top), u=0.0 (left)
-        # In head coords: head_y = +0.25 (UP), head_x = -0.35 (left)
+        # In head coords: head_y = +0.5 (UP), head_x = -0.5 (left)
         point = plane.normalized_to_point_camera(0.0, 0.0)
         point_head = head_coords.camera_to_head(point)
-        assert abs(point_head[0] - (-0.35)) < 1e-6
-        assert abs(point_head[1] - 0.25) < 1e-6
+        assert abs(point_head[0] - (-0.5)) < 1e-6
+        assert abs(point_head[1] - 0.5) < 1e-6
 
         # Bottom-right in screen coords: v=1.0 (bottom), u=1.0 (right)
-        # In head coords: head_y = -0.25 (DOWN), head_x = +0.35 (right)
+        # In head coords: head_y = -0.5 (DOWN), head_x = +0.5 (right)
         point = plane.normalized_to_point_camera(1.0, 1.0)
         point_head = head_coords.camera_to_head(point)
-        assert abs(point_head[0] - 0.35) < 1e-6
-        assert abs(point_head[1] - (-0.25)) < 1e-6
+        assert abs(point_head[0] - 0.5) < 1e-6
+        assert abs(point_head[1] - (-0.5)) < 1e-6
 
     def test_is_point_on_plane(self):
         """Test checking if 3D point lies on plane."""
         head_coords = create_valid_head_coords()
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50, head_coords=head_coords)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0, head_coords=head_coords)
 
         # Point on plane
         point_head = np.array([0.0, 0.0, 0.30])
@@ -184,21 +184,21 @@ class TestVirtualDisplayPlane:
 
     def test_get_plane_bounds_head(self):
         """Test getting plane bounds in head coordinates."""
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0)
 
         min_corner, max_corner = plane.get_plane_bounds_head()
 
-        assert min_corner[0] == -0.35
-        assert min_corner[1] == -0.25
+        assert min_corner[0] == -0.5
+        assert min_corner[1] == -0.5
         assert min_corner[2] == 0.30
-        assert max_corner[0] == 0.35
-        assert max_corner[1] == 0.25
+        assert max_corner[0] == 0.5
+        assert max_corner[1] == 0.5
         assert max_corner[2] == 0.30
 
     def test_get_plane_corners_camera(self):
         """Test getting plane corners in camera coordinates."""
         head_coords = create_valid_head_coords()
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50, head_coords=head_coords)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0, head_coords=head_coords)
 
         corners = plane.get_plane_corners_camera()
 
@@ -207,10 +207,10 @@ class TestVirtualDisplayPlane:
 
     def test_repr(self):
         """Test string representation."""
-        plane = VirtualDisplayPlane(distance=0.30, width=0.70, height=0.50)
+        plane = VirtualDisplayPlane(distance=0.30, width=1.0, height=1.0)
         repr_str = repr(plane)
         assert "0.30" in repr_str
-        assert "0.70x0.50" in repr_str
+        assert "1.00x1.00" in repr_str
 
 
 if __name__ == "__main__":

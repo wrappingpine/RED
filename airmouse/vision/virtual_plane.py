@@ -10,7 +10,7 @@ import numpy as np
 import logging
 import time
 from dataclasses import dataclass
-from typing import Optional, Tuple, Dict
+from typing import Optional, Tuple, Dict, Any
 from .head_coords import HeadCoordinateSystem
 
 logger = logging.getLogger(__name__)
@@ -40,36 +40,57 @@ class VirtualDisplayPlane:
     """
     Virtual display plane anchored to head coordinate system.
 
-    Plane Properties:
-    - Distance: 30cm in front of face (along -forward direction in head coords)
-    - Size: 40cm wide x 25cm high (~16:10 aspect ratio)
-    - Normal: Faces the user (-forward in head coords, i.e., -Z in head space)
-    - Center: At origin + forward * distance in head coordinates
+    Coordinate System Convention:
+    ==============================
+    All dimensions are in NORMALIZED units matching the MediaPipe
+    landmark space [0, 1].  This is critical: MediaPipe hand/face
+    landmarks are normalized image coordinates, and the head coordinate
+    system transforms them without scaling.  Therefore the plane
+    dimensions MUST also be in normalized units.
+
+    Plane Properties (normalized units):
+    - Distance: 0.30 forward in head coords (Z axis, doesn't affect u/v)
+    - Size: 1.0 wide x 1.0 high (covers the full ±0.5 range of
+      normalized landmark offsets relative to the eye midpoint)
+    - Normal: (0, 0, -1) in head coords (faces the user)
+    - Center: (0, 0, distance) in head coordinates
 
     In head coordinate system:
     - Plane center: (0, 0, distance)
     - Plane normal: (0, 0, -1)
-    - X range: [-width/2, width/2]
-    - Y range: [-height/2, height/2]
+    - X range: [-width/2, width/2]  → [-0.5, 0.5] normalized
+    - Y range: [-height/2, height/2] → [-0.5, 0.5] normalized
     - Z = distance (constant)
 
     Normalized coordinates (0,0) to (1,1) map to plane:
     - u = (x + width/2) / width
-    - v = (y + height/2) / height
+    - v = (-y + height/2) / height   (Y inverted: head-up → screen-up)
+
+    Why 1.0 x 1.0?
+    ==============================
+    The eye midpoint is typically near image center (0.5, 0.5).
+    A fingertip at the image left edge has camera-x ≈ 0.0, giving
+    dx = 0.0 - 0.5 = -0.5 in head coords.  With width=1.0:
+        u = (-0.5 + 0.5) / 1.0 = 0.0  ✓ (left edge of screen)
+
+    A fingertip at the image right edge has camera-x ≈ 1.0, giving
+    dx = 1.0 - 0.5 = 0.5.  With width=1.0:
+        u = (0.5 + 0.5) / 1.0 = 1.0  ✓ (right edge of screen)
+
+    The same logic applies to Y.  A 1.0 x 1.0 plane provides a 1:1
+    mapping between image-plane position and screen position, which
+    is the correct baseline for an air mouse.  Adaptive smoothing
+    and acceleration are layered on top later (per spec).
     """
 
-    # Plane dimensions (meters)
-    # NOTE: These dimensions are deliberately large enough to cover the
-    # full range of hand motion in normalized head coordinates.
-    # MediaPipe normalized landmarks span roughly ±0.35 in head X and
-    # ±0.25 in head Y for a typical user at 30cm distance.  The old
-    # 0.40×0.25m plane was too small — hands reaching to the edges
-    # produced v values far outside [0,1] (e.g. 2.757, -0.587).
-    # The new 0.70×0.50m plane provides comfortable margin while
-    # maintaining a usable 1.4:1 aspect ratio.
-    distance: float = 0.30  # 30cm in front of face (positive Z in head coords = forward)
-    width: float = 0.70     # 70cm wide (covers ±0.35m)
-    height: float = 0.50    # 50cm high (covers ±0.25m)
+    # Plane dimensions in NORMALIZED units (NOT meters).
+    # These match the MediaPipe landmark coordinate space [0, 1].
+    # Using metric values here caused a systematic unit mismatch:
+    # landmarks are unitless [0,1] but were divided by metric
+    # plane dimensions, producing u/v far outside [0,1] (e.g. 1.406).
+    distance: float = 0.30   # forward in head coords (Z, doesn't affect u/v)
+    width: float = 1.0       # normalized units: covers ±0.5 offset
+    height: float = 1.0      # normalized units: covers ±0.5 offset
 
     # Head coordinate system reference
     head_coords: Optional[HeadCoordinateSystem] = None
@@ -304,6 +325,86 @@ class VirtualDisplayPlane:
             Clamped (u, v) within [0, 1]
         """
         return (float(np.clip(u, 0.0, 1.0)), float(np.clip(v, 0.0, 1.0)))
+
+    def calibration_diagnostic(self) -> Dict[str, Any]:
+        """
+        Return calibration diagnostic data for verifying plane geometry.
+
+        Use this at startup to verify the plane is correctly positioned
+        relative to the user's expected interaction area.
+
+        Returns:
+            Dictionary with plane geometry, basis vectors, and calibration hints.
+        """
+        diag: Dict[str, Any] = {
+            "plane": {
+                "distance": self.distance,
+                "width": self.width,
+                "height": self.height,
+                "aspect_ratio": self.width / self.height if self.height > 0 else 0,
+                "half_width": self.width / 2.0,
+                "half_height": self.height / 2.0,
+            },
+            "coordinate_convention": {
+                "u_axis": "left(0.0) → right(1.0)",
+                "v_axis": "top(0.0) → bottom(1.0)",
+                "y_inversion": "head Y+ (UP) → v=0 (TOP); head Y- (DOWN) → v=1 (BOTTOM)",
+                "note": "Y axis is inverted: head up maps to screen up",
+            },
+            "expected_mapping": {
+                "center": {"u": 0.5, "v": 0.5},
+                "left_edge": {"u": 0.0, "v": 0.5},
+                "right_edge": {"u": 1.0, "v": 0.5},
+                "top_edge": {"u": 0.5, "v": 0.0},
+                "bottom_edge": {"u": 0.5, "v": 1.0},
+            },
+            "basis_valid": False,
+            "basis_orthonormal": False,
+        }
+
+        if self.head_coords is not None and self.head_coords.is_valid():
+            diag["head_position"] = {
+                "origin_camera": self.head_coords.get_origin().tolist(),
+                "forward_camera": self.head_coords.get_forward_vector().tolist(),
+                "right_camera": self.head_coords.get_right_vector().tolist(),
+                "up_camera": self.head_coords.get_up_vector().tolist(),
+            }
+
+            normal = self.get_plane_normal_camera()
+            x_axis, y_axis = self.get_plane_axes_camera()
+
+            if normal is not None and x_axis is not None and y_axis is not None:
+                diag["basis_valid"] = True
+                diag["plane_normal_camera"] = normal.tolist()
+                diag["plane_x_axis_camera"] = x_axis.tolist()
+                diag["plane_y_axis_camera"] = y_axis.tolist()
+
+                # Check orthonormality
+                dot_xy = float(np.dot(x_axis, y_axis))
+                dot_xn = float(np.dot(x_axis, normal))
+                dot_yn = float(np.dot(y_axis, normal))
+                norm_n = float(np.linalg.norm(normal))
+                norm_x = float(np.linalg.norm(x_axis))
+                norm_y = float(np.linalg.norm(y_axis))
+
+                diag["basis_orthonormal"] = (
+                    abs(dot_xy) < 1e-4 and
+                    abs(dot_xn) < 1e-4 and
+                    abs(dot_yn) < 1e-4 and
+                    abs(norm_n - 1.0) < 1e-4 and
+                    abs(norm_x - 1.0) < 1e-4 and
+                    abs(norm_y - 1.0) < 1e-4
+                )
+                diag["basis_dots"] = {
+                    "x·y": dot_xy,
+                    "x·n": dot_xn,
+                    "y·n": dot_yn,
+                    "|n|": norm_n,
+                    "|x|": norm_x,
+                    "|y|": norm_y,
+                }
+
+        return diag
 
     def normalized_to_point_camera(self, u: float, v: float) -> Optional[np.ndarray]:
         """

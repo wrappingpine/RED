@@ -484,16 +484,49 @@ class HandProjector:
                 error_message="Ray-plane intersection failed in head coordinates"
             )
 
+        # CRITICAL FIX: Check intersection distance BEFORE calling
+        # point_to_normalized.  When the fingertip is at approximately the
+        # same depth as the eye midpoint, dz ≈ 0, so ray_direction_head[2]
+        # ≈ 0 after normalization.  The intersection formula
+        # t = (distance - origin.z) / direction.z then produces a point
+        # hundreds of units away (u=43.6, v=-38.4, etc.).
+        #
+        # point_to_normalized's EPSILON check catches this and returns None,
+        # but the error message is "Failed to convert to normalized
+        # coordinates" — NOT "Ray-plane intersection failed" — so the
+        # fallback at line 382 (which checks for that specific message) is
+        # skipped, and the projection is marked invalid.  The raw enormous
+        # u/v values are still logged by virtual_plane.py's rate-limited
+        # logger, causing the persistent projection_intersection_failed
+        # spam.
+        #
+        # We check the intersection distance here so that:
+        # 1. The fallback is triggered (correct behavior)
+        # 2. The error message matches the fallback condition
+        # 3. The enormous u/v never reaches point_to_normalized
+        max_intersection_distance = 5.0  # 5 units — far beyond plane bounds
+        intersection_distance = float(np.linalg.norm(intersection_head - eye_midpoint_head))
+        if intersection_distance > max_intersection_distance:
+            self._failed_count += 1
+            return ProjectionResult(
+                valid=False,
+                error_message="Ray-plane intersection failed: intersection too distant"
+            )
+
         # Convert to normalized coordinates
         normalized = self.virtual_plane.point_to_normalized(
             self.head_coords.head_to_camera(intersection_head)
         )
 
         if normalized is None:
+            # point_to_normalized returned None — either the point is far
+            # outside plane bounds (caught by EPSILON) or the head_coords
+            # are invalid.  Use the same error message as the ray miss case
+            # so the fallback at line 382 triggers.
             self._failed_count += 1
             return ProjectionResult(
                 valid=False,
-                error_message="Failed to convert to normalized coordinates"
+                error_message="Ray-plane intersection failed: point outside plane bounds"
             )
 
         u, v = normalized
@@ -724,9 +757,58 @@ class HandProjector:
                     valid=True
                 )
 
+            # CRITICAL FIX: Check intersection distance BEFORE calling
+            # point_to_normalized.  Same root cause as _project_in_head_coords:
+            # when dz ≈ 0, the intersection can be hundreds of units away,
+            # producing enormous u/v values (43.6, -38.4, etc.).
+            max_intersection_distance = 5.0
+            intersection_distance = float(np.linalg.norm(intersection_head - eye_head))
+            if intersection_distance > max_intersection_distance:
+                # Graceful fallback: project fingertip x/y onto plane surface
+                half_w = self.virtual_plane.width / 2.0
+                half_h = self.virtual_plane.height / 2.0
+                clamped_x = float(np.clip(fingertip_head[0], -half_w, half_w))
+                clamped_y = float(np.clip(fingertip_head[1], -half_h, half_h))
+                point_head = np.array([
+                    clamped_x, clamped_y, self.virtual_plane.distance,
+                ], dtype=np.float32)
+                normalized = self.virtual_plane.point_to_normalized(hc.head_to_camera(point_head))
+                if normalized is None:
+                    return ProjectionResult(valid=False, error_message="Normalized conversion failed")
+                u, v = normalized
+                logger.debug("Fallback projection (intersection too distant) in project_from_landmarks")
+                return ProjectionResult(
+                    u=u, v=v,
+                    intersection_camera=hc.head_to_camera(point_head),
+                    intersection_head=point_head,
+                    ray_origin_camera=eye_cam,
+                    ray_direction_camera=ray_direction,
+                    valid=True
+                )
+
             normalized = self.virtual_plane.point_to_normalized(hc.head_to_camera(intersection_head))
             if normalized is None:
-                return ProjectionResult(valid=False, error_message="Normalized conversion failed")
+                # Graceful fallback: point outside plane bounds
+                half_w = self.virtual_plane.width / 2.0
+                half_h = self.virtual_plane.height / 2.0
+                clamped_x = float(np.clip(fingertip_head[0], -half_w, half_w))
+                clamped_y = float(np.clip(fingertip_head[1], -half_h, half_h))
+                point_head = np.array([
+                    clamped_x, clamped_y, self.virtual_plane.distance,
+                ], dtype=np.float32)
+                normalized = self.virtual_plane.point_to_normalized(hc.head_to_camera(point_head))
+                if normalized is None:
+                    return ProjectionResult(valid=False, error_message="Normalized conversion failed")
+                u, v = normalized
+                logger.debug("Fallback projection (point outside bounds) in project_from_landmarks")
+                return ProjectionResult(
+                    u=u, v=v,
+                    intersection_camera=hc.head_to_camera(point_head),
+                    intersection_head=point_head,
+                    ray_origin_camera=eye_cam,
+                    ray_direction_camera=ray_direction,
+                    valid=True
+                )
 
             u, v = normalized
 
