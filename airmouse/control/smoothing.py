@@ -38,10 +38,18 @@ class SmoothingConfig:
     # EMA parameters
     ema_alpha: float = 0.3
     
-    # One Euro Filter parameters
-    one_euro_min_cutoff: float = 1.0
-    one_euro_beta: float = 0.0
-    one_euro_d_cutoff: float = 1.0
+    # One Euro Filter parameters — tuned for low-latency cursor tracking.
+    # min_cutoff=0.5: At rest, this gives moderate smoothing (alpha ≈ 0.76
+    #   at 60fps) which suppresses jitter without introducing visible lag.
+    #   A value of 1.0 was too aggressive, creating ~50ms delay on first movement.
+    # beta=0.08: Makes cutoff frequency increase with velocity.  Fast hand
+    #   movements get progressively less smoothing (alpha → 1.0) while slow
+    #   movements stay heavily filtered.  beta=0.0 gave a fixed cutoff.
+    # d_cutoff=0.5: Derivative smoothing.  Lower than 1.0 to allow faster
+    #   adaptation to acceleration changes without overshoot.
+    one_euro_min_cutoff: float = 0.5
+    one_euro_beta: float = 0.08
+    one_euro_d_cutoff: float = 0.5
 
 
 @dataclass
@@ -83,10 +91,18 @@ class CursorConfig:
     # EMA alpha (0.0 to 1.0, lower = more smoothing)
     ema_alpha: float = 0.3
 
-    # One Euro Filter parameters
-    one_euro_min_cutoff: float = 1.0
-    one_euro_beta: float = 0.0
-    one_euro_d_cutoff: float = 1.0
+    # One Euro Filter parameters — tuned for low-latency cursor tracking.
+    # min_cutoff=0.5: At rest, this gives moderate smoothing (alpha ≈ 0.76
+    #   at 60fps) which suppresses jitter without introducing visible lag.
+    #   A value of 1.0 was too aggressive, creating ~50ms delay on first movement.
+    # beta=0.08: Makes cutoff frequency increase with velocity.  Fast hand
+    #   movements get progressively less smoothing (alpha → 1.0) while slow
+    #   movements stay heavily filtered.  beta=0.0 gave a fixed cutoff.
+    # d_cutoff=0.5: Derivative smoothing.  Lower than 1.0 to allow faster
+    #   adaptation to acceleration changes without overshoot.
+    one_euro_min_cutoff: float = 0.5
+    one_euro_beta: float = 0.08
+    one_euro_d_cutoff: float = 0.5
 
     # Invert axes if needed
     invert_x: bool = False

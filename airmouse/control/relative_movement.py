@@ -65,10 +65,10 @@ class RelativeMouseConfig:
     # Smoothing algorithm: "one_euro" (adaptive), "ema" (exponential), "none"
     smoothing: str = "one_euro"
     
-    # One Euro Filter parameters (for adaptive smoothing)
-    one_euro_min_cutoff: float = 1.0
-    one_euro_beta: float = 0.007
-    one_euro_d_cutoff: float = 1.0
+    # One Euro Filter parameters (for adaptive smoothing) — tuned for low latency
+    one_euro_min_cutoff: float = 0.5
+    one_euro_beta: float = 0.08
+    one_euro_d_cutoff: float = 0.5
     
     # EMA smoothing alpha (if smoothing="ema")
     ema_alpha: float = 0.3

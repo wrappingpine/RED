@@ -31,9 +31,9 @@ class TestRelativeMouseConfig:
         assert config.acceleration_exponent == 1.2
         assert config.max_velocity_pixels == 500.0
         assert config.smoothing == "one_euro"
-        assert config.one_euro_min_cutoff == 1.0
-        assert config.one_euro_beta == 0.007
-        assert config.one_euro_d_cutoff == 1.0
+        assert config.one_euro_min_cutoff == 0.5
+        assert config.one_euro_beta == 0.08
+        assert config.one_euro_d_cutoff == 0.5
         assert config.tracking_loss_frames == 5
         assert config.recovery_frames == 3
         assert config.stationary_threshold == 0.002

@@ -756,19 +756,26 @@ class TrackingProcessor:
             projection = self._projector.project(primary_hand, best_face) if self._projector else None
 
             if not projection or not projection.valid:
-                logger.debug(f"Primary projection failed: {projection.error_message if projection else 'No projector'}")
-                self._update_lost_frames()
-                return TrackingResult(
-                    tracked_hands=[],
-                    primary_hand=None,
-                    secondary_hand=None,
-                    tracking_state=TrackingState.LOST_TRACK,
-                    projection=None,
-                    secondary_projection=None,
-                    timestamp=current_time
+                # CRITICAL FIX: Projection failure ≠ tracking loss.
+                # A single bad frame (e.g. hand at edge, brief occlusion)
+                # should NOT invalidate the entire tracking pipeline.
+                # Instead, hold the last valid projection and continue
+                # tracking the hand.  Only reset tracking when the hand
+                # itself is genuinely lost (see is_lost check below).
+                logger.debug(
+                    f"Projection failed (holding last valid): "
+                    f"{projection.error_message if projection else 'No projector'}"
                 )
+                # Use the last valid projection if available
+                if self._last_projection and self._last_projection.valid:
+                    projection = self._last_projection
+                else:
+                    # No previous valid projection — still track the hand,
+                    # but mark projection as invalid so cursor holds position
+                    projection = None
 
-            self._last_projection = projection
+            if projection:
+                self._last_projection = projection
 
             # Project secondary hand if present and two-hand mode enabled
             if secondary_hand and self.config.enable_two_hand:
@@ -1107,7 +1114,136 @@ class TrackingProcessor:
                 "lost_frames": self._secondary_hand.lost_frames,
             }
 
+        # Add projection debug info
+        if self._last_projection:
+            proj = self._last_projection
+            info["projection"] = {
+                "valid": proj.valid,
+                "u": round(proj.u, 4),
+                "v": round(proj.v, 4),
+                "confidence": round(proj.confidence, 4),
+                "ray_origin": proj.ray_origin.tolist() if proj.ray_origin is not None else None,
+                "ray_direction": proj.ray_direction.tolist() if proj.ray_direction is not None else None,
+                "intersection_point": proj.intersection_point.tolist() if proj.intersection_point is not None else None,
+                "distance_to_plane": round(proj.distance_to_plane, 4) if proj.distance_to_plane is not None else None,
+            }
+
+        if self.virtual_plane:
+            info["virtual_plane"] = {
+                "width": self.virtual_plane.width,
+                "height": self.virtual_plane.height,
+                "distance": self.virtual_plane.distance,
+            }
+
         return info
+
+    def get_projection_debug_overlay(self, frame_width: int, frame_height: int) -> Optional[np.ndarray]:
+        """
+        Draw debug overlay on camera frame showing plane axes, ray, and intersection.
+
+        Renders:
+        - Plane axes (X=red, Y=green) projected to image space
+        - Ray from eye midpoint through fingertip (blue line)
+        - Intersection point (magenta circle)
+        - Coordinate labels
+
+        Args:
+            frame_width: Image width in pixels
+            frame_height: Image height in pixels
+
+        Returns:
+            Annotated frame as numpy array, or None if no valid projection
+        """
+        try:
+            import cv2
+        except ImportError:
+            return None
+
+        if not self._primary_hand or self._primary_hand.is_lost(self.config):
+            return None
+
+        if not self._last_projection or not self._last_projection.valid:
+            return None
+
+        proj = self._last_projection
+        frame = np.zeros((frame_height, frame_width, 3), dtype=np.uint8)
+
+        # Draw plane axes projected to image space
+        if self.virtual_plane and self.head_coords and self.head_coords.is_valid():
+            try:
+                # Get plane corners in camera coords
+                corners_cam = self.virtual_plane.get_plane_corners_camera()
+                if corners_cam is not None and len(corners_cam) >= 4:
+                    # Project corners to image space (pinhole camera model)
+                    # Camera intrinsics: assume 60° FOV, principal point at center
+                    fx = frame_width / (2 * np.tan(np.radians(30)))
+                    fy = fx  # square pixels
+                    cx = frame_width / 2.0
+                    cy = frame_height / 2.0
+
+                    for i, corner in enumerate(corners_cam):
+                        if corner[0] <= 0:
+                            continue
+                        px = int(cx + (corner[0] * fx) / corner[2])
+                        py = int(cy - (corner[1] * fy) / corner[2])  # Y inverted for image
+                        if 0 <= px < frame_width and 0 <= py < frame_height:
+                            color = [(0, 0, 255), (0, 255, 0), (0, 0, 255), (0, 255, 0)][i % 4]
+                            cv2.circle(frame, (px, py), 5, color, -1)
+                            if i == 0:
+                                cv2.putText(frame, "X", (px + 8, py),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+                            elif i == 1:
+                                cv2.putText(frame, "Y", (px + 8, py),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 2)
+
+                    # Draw plane outline
+                    pts = []
+                    for corner in corners_cam:
+                        if corner[0] <= 0:
+                            continue
+                        px = int(cx + (corner[0] * fx) / corner[2])
+                        py = int(cy - (corner[1] * fy) / corner[2])
+                        pts.append([px, py])
+                    if len(pts) >= 4:
+                        pts = np.array(pts, dtype=np.int32)
+                        cv2.polylines(frame, [pts], True, (255, 255, 0), 2)
+            except Exception:
+                pass
+
+        # Draw ray from eye midpoint through fingertip
+        if proj.ray_origin is not None and proj.ray_direction is not None:
+            try:
+                fx = frame_width / (2 * np.tan(np.radians(30)))
+                fy = fx
+                cx = frame_width / 2.0
+                cy = frame_height / 2.0
+
+                # Ray origin (eye midpoint) in image
+                ox = proj.ray_origin
+                if ox[0] > 0:
+                    px_o = int(cx + (ox[0] * fx) / ox[2])
+                    py_o = int(cy - (ox[1] * fy) / ox[2])
+                    cv2.circle(frame, (px_o, py_o), 3, (255, 0, 0), -1)  # Blue dot for eye
+
+                # Ray direction: draw a line from origin in direction
+                if proj.intersection_point is not None:
+                    ip = proj.intersection_point
+                    px_i = int(cx + (ip[0] * fx) / ip[2])
+                    py_i = int(cy - (ip[1] * fy) / ip[2])
+
+                    if 0 <= px_o < frame_width and 0 <= py_o < frame_height:
+                        if 0 <= px_i < frame_width and 0 <= py_i < frame_height:
+                            cv2.line(frame, (px_o, py_o), (px_i, py_i), (255, 0, 255), 2)  # Magenta ray
+                            cv2.circle(frame, (px_i, py_i), 6, (0, 255, 255), -1)  # Yellow intersection
+
+                            # Label
+                            label = f"u={proj.u:.2f}, v={proj.v:.2f}"
+                            cv2.putText(frame, label, (px_i + 10, py_i - 10),
+                                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 255, 255), 2)
+            except Exception:
+                pass
+
+        return frame
 
     def reset(self):
         """Reset all tracking state."""

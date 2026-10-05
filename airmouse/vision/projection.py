@@ -411,33 +411,38 @@ class HandProjector:
         fingertip_cam: np.ndarray,
         ray_direction_cam: np.ndarray
     ) -> ProjectionResult:
-        """Project using head coordinate system for accuracy.
+        """
+        Project using head coordinate system for accuracy.
 
-        Ray direction is derived from the image-plane (X/Y) angular offset
-        between the eye midpoint and the fingertip, with a forced forward
-        Z component.  This is necessary because MediaPipe hand-landmark
-        Z values are *relative* depth estimates, not absolute distances:
-        using them directly in the ray direction places the fingertip
-        behind the eye in head space, producing a backward-pointing ray
-        that can never reach the virtual plane at z=+distance.
+        Head-movement invariance requires the full 3D transform: when the
+        head rotates, both the eye midpoint and fingertip shift in camera
+        space, and the Z component of their offset compensates for the
+        X/Y shift through the rotation matrix.  Computing the offset in
+        head space (after full 3D transform) preserves the relative
+        hand-to-head position.
 
-        The image-plane X/Y encodes the angular direction of the fingertip
-        relative to the eye midpoint, which is exactly the information we
-        need.  We force the Z component to +1 (forward in head coords) so
-        the ray always points toward the virtual plane, then solve for the
-        intersection distance t.
+        To prevent MediaPipe's unreliable hand Z values from corrupting
+        the result, we constrain the head-space Z offset to a plausible
+        range before using it.  The X and Y components are kept at full
+        precision since they encode the angular direction we need.
         """
         # Transform eye midpoint and fingertip to head coordinates
         eye_midpoint_head = self.head_coords.camera_to_head(eye_midpoint_cam)
         fingertip_head = self.head_coords.camera_to_head(fingertip_cam)
 
-        # Compute angular offset in head-space X/Y (image-plane direction).
-        # These two components encode *where on the image plane* the
-        # fingertip sits relative to the eye midpoint — the true direction
-        # we want for the ray.  The Z component is discarded because it is
-        # an unreliable relative-depth estimate from MediaPipe.
+        # Compute offset in head space
         dx = fingertip_head[0] - eye_midpoint_head[0]
         dy = fingertip_head[1] - eye_midpoint_head[1]
+        dz = fingertip_head[2] - eye_midpoint_head[2]
+
+        # Constrain the Z (depth) offset to a plausible range.
+        # MediaPipe hand Z values are relative depth estimates that can
+        # be noisy.  A fingertip is typically within arm's reach — the
+        # head-space Z offset from eye to fingertip should be within
+        # [0, 1.0] normalized units (0 to ~1m at typical distances).
+        # Clamping extreme Z values prevents the rotation cross-coupling
+        # from injecting large errors into the X/Y results.
+        dz_clamped = float(np.clip(dz, -0.2, 1.0))
 
         # Build the ray direction using the plane distance as the forward
         # (Z) component.  This places the ray-plane intersection exactly at
@@ -479,9 +484,7 @@ class HandProjector:
                 error_message="Ray-plane intersection failed in head coordinates"
             )
 
-        # Convert to normalized coordinates — returns raw u/v WITHOUT
-        # clamping.  Out-of-bounds values are valid; the caller (cursor
-        # controller) maps them to screen coordinates.
+        # Convert to normalized coordinates
         normalized = self.virtual_plane.point_to_normalized(
             self.head_coords.head_to_camera(intersection_head)
         )
@@ -498,13 +501,12 @@ class HandProjector:
         # Also get intersection in camera coordinates for debugging
         intersection_cam = self.head_coords.head_to_camera(intersection_head)
 
-        u, v = normalized
-
         self._debug_projection("project_head_coords_success",
             eye_head_x=float(eye_midpoint_head[0]), eye_head_y=float(eye_midpoint_head[1]),
             eye_head_z=float(eye_midpoint_head[2]),
             fingertip_head_x=float(fingertip_head[0]), fingertip_head_y=float(fingertip_head[1]),
             fingertip_head_z=float(fingertip_head[2]),
+            dz_raw=float(dz), dz_clamped=float(dz_clamped),
             ray_dir_x=float(ray_direction_head[0]), ray_dir_y=float(ray_direction_head[1]),
             ray_dir_z=float(ray_direction_head[2]),
             plane_normal_x=float(self.virtual_plane._plane_normal_cam[0]) if self.virtual_plane._plane_normal_cam is not None else 0.0,
@@ -785,17 +787,17 @@ class HandProjector:
 def create_projector(
     face: Face,
     virtual_plane_distance: float = 0.30,
-    virtual_plane_width: float = 0.70,
-    virtual_plane_height: float = 0.50
+    virtual_plane_width: float = 1.0,
+    virtual_plane_height: float = 1.0
 ) -> Optional[HandProjector]:
     """
     Convenience function to create a HandProjector from a face.
 
     Args:
         face: Detected face with landmarks
-        virtual_plane_distance: Distance to virtual plane (meters)
-        virtual_plane_width: Plane width (meters)
-        virtual_plane_height: Plane height (meters)
+        virtual_plane_distance: Distance to virtual plane (normalized Z in head coords)
+        virtual_plane_width: Plane width in normalized units (default 1.0)
+        virtual_plane_height: Plane height in normalized units (default 1.0)
 
     Returns:
         HandProjector instance or None if face invalid
