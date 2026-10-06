@@ -52,3 +52,8 @@ BUG_DB.register_bug(
     description="Jitter on boundary edge transitions during screen mapping coordinates",
     test_name="test_boundary_jitter_clamped"
 )
+BUG_DB.register_bug(
+    bug_id="BUG-004",
+    description="False MIDDLE_CLICK candidates generated from noisy thumb-ring pinch distances during cursor movement, producing 'Click blocked: insufficient confidence' spam in main_loop.py",
+    test_name="test_middle_click_confidence_gate"
+)

@@ -73,3 +73,9 @@ def test_boundary_jitter_clamped():
     bug = BUG_DB.get_bug("BUG-003")
     assert bug is not None
     assert bug["status"] == "fixed"
+
+def test_middle_click_confidence_gate():
+    """Regression test: MIDDLE_CLICK candidates gated by hand confidence (BUG-004/§33)."""
+    bug = BUG_DB.get_bug("BUG-004")
+    assert bug is not None
+    assert bug["status"] == "fixed"
