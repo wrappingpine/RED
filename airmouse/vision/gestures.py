@@ -128,6 +128,15 @@ class GestureConfig:
     click_max_duration: float = 0.3        # max time for click (not drag) (benchmark: 0.3s)
     click_max_movement: float = 0.03        # max movement during click (benchmark: 3% screen width)
 
+    # === Middle click confidence gate (§33) ===
+    # middle_click_min_confidence: minimum hand confidence to evaluate
+    # a middle-click candidate.  Below this, noisy landmark estimates
+    # during cursor movement can produce false pinch distances that
+    # would otherwise enter the state machine and get rejected later.
+    # Benchmark: 0.60 — above tracking minimum (0.40) but below the
+    # click confidence gate (HIGH state, typically >0.7).
+    middle_click_min_confidence: float = 0.60
+
     # === Gesture cooldowns (§33) ===
     # gesture_cooldown: prevents rapid re-triggering of same gesture
     # Benchmark: 0.3s minimum between same-type gestures
@@ -534,7 +543,7 @@ class GestureRecognizer:
         # Default 0.6: above the tracking minimum (0.40) but below
         # the click confidence gate (HIGH state, typically >0.7).
         # This prevents false candidates from entering the state machine.
-        middle_click_min_conf = getattr(self.config, 'middle_click_min_confidence', 0.60)
+        middle_click_min_conf = self.config.middle_click_min_confidence
 
         if primary_hand.confidence < middle_click_min_conf:
             # Reset middle pinch state when confidence is too low

@@ -75,6 +75,7 @@ class GestureConfig:
     pinch_release_threshold: float = 0.070
     fist_hold_time: float = 0.5
     drag_hold_time: float = 0.2
+    middle_click_min_confidence: float = 0.60  # Gate: reject MIDDLE_CLICK candidates below this confidence
 
 
 @dataclass

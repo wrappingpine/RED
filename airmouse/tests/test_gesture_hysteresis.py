@@ -14,8 +14,10 @@ from airmouse.vision.gestures import (
 from airmouse.vision.hand_tracker import Hand, Landmark, HandLandmark
 
 
-def create_mock_hand(pinch_dist=0.1, is_fist=False, extended_fingers=None) -> Hand:
+def create_mock_hand(pinch_dist=0.1, ring_pinch_dist=None, is_fist=False, extended_fingers=None) -> Hand:
     """Create a mock hand with specific pinch distance and finger states."""
+    if ring_pinch_dist is None:
+        ring_pinch_dist = 0.2  # Default: ring far from thumb (no middle pinch)
     landmarks = []
     for i in range(21):
         if i == HandLandmark.INDEX_TIP.value:
@@ -32,8 +34,9 @@ def create_mock_hand(pinch_dist=0.1, is_fist=False, extended_fingers=None) -> Ha
             y = 0.5 if "middle" in (extended_fingers or []) else 0.7
             z = 0.0
         elif i == HandLandmark.RING_TIP.value:
-            x = 0.6
-            y = 0.7
+            # Adjust ring tip for middle-click pinch distance
+            x = 0.5 + ring_pinch_dist
+            y = 0.5  # Same Y as thumb so distance = ring_pinch_dist
             z = 0.0
         elif i == HandLandmark.PINKY_TIP.value:
             x = 0.65
@@ -299,6 +302,84 @@ class TestTrackingStateEnum:
             TrackingState.PRECISION_MODE
         ]
         assert len(states) == 6
+
+
+class TestMiddleClickConfidenceGate:
+    """Tests for middle-click confidence gating (§33)."""
+
+    def setup_method(self):
+        """Set up recognizer with test config."""
+        config = GestureConfig(
+            pinch_enter_threshold=0.045,
+            pinch_confirm_threshold=0.040,
+            pinch_release_threshold=0.070,
+            drag_hold_time=0.2,
+            click_max_movement=0.03,
+            fist_hold_time=0.5,
+            scroll_sensitivity=1.0,
+            middle_click_min_confidence=0.60
+        )
+        self.recognizer = GestureRecognizer(config)
+
+    def test_no_middle_click_below_confidence(self):
+        """Test no MIDDLE_CLICK candidate when hand confidence < 0.60."""
+        # Create a hand with thumb+ring pinch but low confidence
+        hand = create_mock_hand(pinch_dist=0.1, ring_pinch_dist=0.040)
+        hand.confidence = 0.40  # Below middle_click_min_confidence
+
+        events = self.recognizer.process([hand])
+
+        middle_click_events = [e for e in events if e.gesture_type == GestureType.MIDDLE_CLICK]
+        assert len(middle_click_events) == 0
+        # Pinch state should NOT be active (gate blocked it)
+        assert not self.recognizer._state._middle_pinch_active
+
+    def test_middle_click_above_confidence(self):
+        """Test MIDDLE_CLICK fires when confidence >= 0.60 and pinch confirmed."""
+        # Need to satisfy confirm threshold: dist < 0.040
+        hand = create_mock_hand(pinch_dist=0.1, ring_pinch_dist=0.035)
+        hand.confidence = 0.90  # Above middle_click_min_confidence
+
+        # First frame: enter pinch
+        events = self.recognizer.process([hand])
+        assert self.recognizer._state._middle_pinch_active
+
+        # Second frame: confirm pinch (dist < 0.040)
+        events = self.recognizer.process([hand])
+        middle_click_events = [e for e in events if e.gesture_type == GestureType.MIDDLE_CLICK]
+        assert len(middle_click_events) == 1
+
+    def test_middle_click_resets_on_low_confidence(self):
+        """Test active middle pinch resets when confidence drops."""
+        # First establish active pinch with high confidence
+        hand = create_mock_hand(pinch_dist=0.1, ring_pinch_dist=0.040)
+        hand.confidence = 0.90
+        self.recognizer.process([hand])
+        assert self.recognizer._state._middle_pinch_active
+
+        # Now drop confidence below threshold
+        hand.confidence = 0.30
+        self.recognizer.process([hand])
+        # Pinch state should be reset
+        assert not self.recognizer._state._middle_pinch_active
+
+    def test_middle_click_custom_threshold(self):
+        """Test custom middle_click_min_confidence is respected."""
+        config = GestureConfig(
+            pinch_enter_threshold=0.045,
+            pinch_confirm_threshold=0.040,
+            pinch_release_threshold=0.070,
+            middle_click_min_confidence=0.95  # Very high
+        )
+        recognizer = GestureRecognizer(config)
+
+        hand = create_mock_hand(pinch_dist=0.1, ring_pinch_dist=0.040)
+        hand.confidence = 0.80  # Below custom threshold
+
+        events = recognizer.process([hand])
+        middle_click_events = [e for e in events if e.gesture_type == GestureType.MIDDLE_CLICK]
+        assert len(middle_click_events) == 0
+        assert not recognizer._state._middle_pinch_active
 
 
 class TestGestureTypeEnum:
