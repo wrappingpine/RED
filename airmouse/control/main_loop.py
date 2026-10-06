@@ -1555,9 +1555,16 @@ class AirMouseController:
             # High-risk gestures need higher confidence validation
             if event.gesture_type in (GestureType.LEFT_CLICK, GestureType.RIGHT_CLICK,
                                     GestureType.MIDDLE_CLICK):
-                # Double-check confidence for clicks
+                # Double-check confidence for clicks (defense-in-depth; the gesture
+                # recognizer already gates candidates at generation, so
+                # this check should rarely fire — log at debug, not warning,
+                # to avoid spam during normal cursor movement.
                 if not self._has_sufficient_confidence_for_click():
-                    logger.warning(f"Click blocked: insufficient confidence for {event.gesture_type.name}")
+                    logger.debug(
+                        "Click blocked: insufficient confidence for %s (conf_state=%s)",
+                        event.gesture_type.name,
+                        self._tracking_status.confidence.state.name
+                    )
                     continue
 
             if event.gesture_type == GestureType.LEFT_CLICK:
