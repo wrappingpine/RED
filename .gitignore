@@ -56,5 +56,6 @@ logs/
 *.local.conf
 
 # AirMouse specific
-*.task
+# MediaPipe model files (.task) are tracked in git — do NOT ignore them.
+# Only ignore stray .task files in temp/profiles directories.
 profiles/*.json.bak
