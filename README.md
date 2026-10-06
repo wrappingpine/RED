@@ -1,561 +1,538 @@
-🖐️ RED — Air Mouse
+# 🖐️ AirMouse
 
-<p align="center">
-  <strong>Turn your camera into a mouse.</strong><br>
-  Control your Linux desktop with your hands — no physical mouse required.
-</p><p align="center">
-  <a href="https://github.com/wrappingpine/RED">
-    <img src="https://img.shields.io/badge/GitHub-RED-black?style=for-the-badge&logo=github" alt="GitHub">
-  </a>
-  <img src="https://img.shields.io/badge/Linux-Supported-success?style=for-the-badge&logo=linux" alt="Linux">
-  <img src="https://img.shields.io/badge/OpenCV-Vision-blue?style=for-the-badge&logo=opencv" alt="OpenCV">
-  <img src="https://img.shields.io/badge/MediaPipe-Hand%20Tracking-orange?style=for-the-badge" alt="MediaPipe">
-  <img src="https://img.shields.io/badge/Status-Active%20Development-yellow?style=for-the-badge" alt="Status">
-</p>---
+### Control your Linux desktop with your hand.
 
-⚡ What is RED?
+**AirMouse** is an open-source, camera-based virtual mouse for Linux that lets you control the desktop using natural hand movements and gestures.
 
-RED is a camera-based, hands-free mouse for Linux.
+It uses computer vision to track your hand, estimate the palm position, translate that movement into cursor movement, and recognize gestures for actions such as clicking, dragging, and scrolling.
 
-It uses computer vision to track your hand and translate your movements and gestures into desktop input.
-
-        🖐️
-        │
-        │  Move / Gesture
-        ▼
-   📷 Webcam
-        │
-        ▼
-  🧠 Computer Vision
-        │
-        ▼
- 🎯 Spatial Mapping
-        │
-        ▼
- 🖱️ Input Controller
-        │
-        ▼
-   🖥️ Linux Desktop
-
-«No special hardware. No wearable controller. Just a camera and your hand.»
+> 🚧 **Status: Active Development**
+>
+> AirMouse is currently focused on Linux, with Pop!_OS/COSMIC + Wayland as an important development target.
 
 ---
 
-🎬 Demo
+## ✨ Features
 
-«🚧 Demo video coming soon»
+### 🖐️ Hand-Based Cursor
 
-The goal is simple:
+Control the cursor using the position of your palm instead of a physical mouse.
 
-Point  →  Move cursor
-Pinch  →  Click
-Gesture → Action
+* Palm-based 2D tracking
+* Left and right hand support
+* Stable hand selection
+* Hand-loss recovery
+* Smooth cursor movement
+* Adaptive workspace
+* Full-screen control
+* Configurable cursor sensitivity
+* ~20% increased cursor responsiveness target
 
-RED is being developed toward a natural interaction model where the cursor follows your hand smoothly, accurately, and predictably.
+### 🎯 Smart Cursor Behavior
 
----
+AirMouse is designed around natural hand movement:
 
-✨ Features
+| Movement           | Behavior                   |
+| ------------------ | -------------------------- |
+| 🐢 Slow movement   | Precision                  |
+| ⚡ Fast movement    | Faster cursor response     |
+| ✋ Stationary hand  | Stabilization              |
+| 🖥️ Workspace edge | Adaptive boundary behavior |
 
-<table>
-<tr>
-<td width="50%">🖐️ Hand Tracking
+The goal is not simply to make the cursor follow the camera.
 
-Real-time hand landmark detection using MediaPipe.
-
-🖱️ Cursor Control
-
-Move the desktop cursor using your hand.
-
-🤏 Gesture Input
-
-Use configurable hand gestures for mouse actions.
-
-👥 Multi-Hand Support
-
-Architecture designed for reliable two-hand interaction.
-
-</td><td width="50%">🎯 Spatial Mapping
-
-Converts camera-space movement into screen coordinates.
-
-🧠 Head-Relative Tracking
-
-Experimental spatial tracking using face/head landmarks.
-
-⚡ Performance Focused
-
-Designed with low-end hardware and low latency in mind.
-
-🐧 Linux First
-
-Built around Linux desktop and input systems.
-
-</td>
-</tr>
-</table>---
-
-🧠 How RED Works
-
-RED is more than simply mapping your fingertip to the screen.
-
-The processing pipeline is divided into several stages:
-
-┌───────────────────────┐
-│       📷 CAMERA       │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│      OpenCV           │
-│    Frame Capture      │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│     MediaPipe         │
-│   Hand + Face Vision  │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│   Spatial Mapping     │
-│  Camera → Screen      │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│ Gesture / State Logic │
-└───────────┬───────────┘
-            │
-            ▼
-┌───────────────────────┐
-│    Linux Input        │
-└───────────┬───────────┘
-            │
-            ▼
-       🖥️ DESKTOP
+The goal is to make it **feel like a mouse**.
 
 ---
 
-🎮 Interaction Model
+## 👆 Gesture Control
 
-RED is designed around simple, human-readable interactions.
+AirMouse separates cursor movement from gesture recognition.
 
-Action| Input
-Move cursor| ☝️ Index finger
-Click| 🤏 Pinch
-Scroll| 🚧 In development
-Drag| 🚧 In development
-Right click| 🚧 In development
-Custom gestures| 🚧 Planned
+This allows hand movement to remain responsive even when a gesture is being detected.
 
-The gesture system is intentionally being developed to minimize false positives.
+Planned/supported gesture actions include:
 
----
+* 🖱️ Left click
+* 🖱️ Right click
+* 🖱️ Middle click
+* ✋ Drag
+* ↕️ Scroll
+* 🤏 Additional configurable gestures
 
-🎯 The Hard Part: Making It Feel Natural
-
-A webcam can detect your hand.
-
-That's easy.
-
-Making it feel like a real mouse is much harder.
-
-RED focuses heavily on:
-
-        Raw Tracking
-             │
-             ▼
-       Noise Filtering
-             │
-             ▼
-       Motion Smoothing
-             │
-             ▼
-     Coordinate Mapping
-             │
-             ▼
-      Gesture Detection
-             │
-             ▼
-        Input Event
-
-Current engineering priorities
-
-- 🎯 Accurate cursor direction
-- 🪶 Smooth movement
-- ⚡ Low latency
-- 🧹 Jitter reduction
-- 🛑 False-click prevention
-- 👥 Reliable two-hand detection
-- 💡 Lighting robustness
-- 🧮 Better coordinate mapping
+Gesture recognition includes debounce and confidence checks to reduce accidental actions.
 
 ---
 
-🔬 Experimental Spatial Tracking
+## 🧠 Computer Vision
 
-RED also explores a more advanced approach than traditional webcam mouse implementations.
+AirMouse uses hand landmarks to understand hand position and gestures.
 
-Instead of thinking only in terms of:
+### Current architecture
 
-Camera Pixel → Screen Pixel
+```text
+┌──────────────┐
+│    Camera    │
+└──────┬───────┘
+       ↓
+┌────────────────────┐
+│ Camera Processing  │
+└────────┬───────────┘
+         ↓
+┌────────────────────┐
+│ Hand Landmarking   │
+└────────┬───────────┘
+         ↓
+    ┌────┴─────┐
+    ↓          ↓
+┌─────────┐ ┌──────────────┐
+│  Palm   │ │ Hand         │
+│ Center  │ │ Landmarks    │
+└────┬────┘ └──────┬───────┘
+     ↓              ↓
+┌─────────────┐ ┌─────────────┐
+│   Cursor    │ │   Gesture   │
+│   Pipeline  │ │   Pipeline  │
+└──────┬──────┘ └──────┬──────┘
+       ↓               ↓
+       └───────┬───────┘
+               ↓
+       ┌──────────────┐
+       │ Linux Input  │
+       └──────────────┘
+```
 
-the system can reason about:
+### Why this architecture?
 
-          Head
-           👤
-           │
-           │
-           ▼
-      Virtual Plane
-    ┌──────────────┐
-    │              │
-    │   🖐️        │
-    │              │
-    └──────────────┘
-           │
-           ▼
-       Screen XY
+The cursor and gesture systems are intentionally separated.
 
-This creates the possibility of a more consistent 3D-aware pointing model.
+A gesture detection delay should **not freeze cursor movement**, and temporary cursor tracking loss should **not accidentally trigger a click**.
 
 ---
 
-🛠️ Technology
+## 🚀 Performance
 
-Layer| Technology
-Programming| Python
-Video| OpenCV
-Hand Tracking| MediaPipe
-Face Tracking| MediaPipe
-Input| Linux input / "uinput"
-Platform| Linux
-Primary Environment| Pop!_OS
+AirMouse is designed to run on relatively low-power hardware.
+
+The project prioritizes:
+
+* Low latency
+* Low CPU usage
+* Efficient camera processing
+* Lightweight hand tracking
+* Minimal frame copying
+* Adaptive smoothing
+* Responsive input
+
+Target performance:
+
+```text
+Minimum target:   ~20 FPS
+Preferred target: 25–30 FPS
+```
+
+Performance diagnostics can measure:
+
+```text
+FPS
+Camera processing
+Hand inference
+Cursor processing
+Gesture processing
+Input delivery
+Total latency
+CPU usage
+RAM usage
+```
 
 ---
 
-🚀 Quick Start
+# 🖥️ Linux Support
 
-1. Clone
+AirMouse is currently **Linux-first**.
 
+Primary development environment:
+
+* Linux
+* Pop!_OS
+* COSMIC
+* Wayland
+
+Other Linux distributions are intended to be supported where their camera and input systems are compatible.
+
+### Current platform direction
+
+```text
+Linux       ██████████  Primary
+Windows     ░░░░░░░░░░  Future
+macOS       ░░░░░░░░░░  Future
+```
+
+Cross-platform support is intentionally not the current priority.
+
+---
+
+# 📦 Installation
+
+## Requirements
+
+Recommended:
+
+* Linux
+* Python 3
+* Webcam
+* MediaPipe-compatible environment
+* Camera access permissions
+* Linux mouse-input backend
+
+Optional/recommended for the current Wayland implementation:
+
+```bash
+ydotool
+```
+
+---
+
+## Clone the repository
+
+```bash
 git clone https://github.com/wrappingpine/RED.git
 cd RED
+```
 
-2. Create environment
+---
 
+## Install dependencies
+
+Follow the dependency configuration included in the repository.
+
+If a virtual environment is used:
+
+```bash
 python3 -m venv .venv
 source .venv/bin/activate
+```
 
-3. Install dependencies
+Then install the project dependencies:
 
+```bash
 pip install -r requirements.txt
-
-4. Run RED
-
-./run.sh
-
-If the launcher isn't executable:
-
-chmod +x run.sh
-./run.sh
-
----
-
-🧪 Developer Mode
-
-All tests live in `airmouse/tests/`. Run the full suite with:
-
-```sh
-pytest airmouse/tests/ -v
 ```
 
-Individual test modules can also be run directly, e.g.:
+> Dependency installation may change while AirMouse is under active development. Check the repository's current configuration before installing manually.
 
-```sh
-python -m pytest airmouse/tests/test_projection.py -v
+---
+
+# ▶️ Running AirMouse
+
+If the `airmouse` command is installed:
+
+```bash
+airmouse
 ```
 
-Performance benchmarks
+Alternatively, run the project's main entry point according to the current repository structure.
 
-```sh
-python benchmark_full.py --iterations 30
-python benchmark_full.py --iterations 5 --ci   # emit P95=<ms> for CI gate
+---
+
+# ⚙️ Configuration
+
+AirMouse is designed to expose important behavior through configuration rather than requiring source-code modifications.
+
+Important parameters include:
+
+```text
+cursor_speed_multiplier = 1.20
+
+workspace_x_min
+workspace_x_max
+
+workspace_y_min
+workspace_y_max
+
+hand_detection_confidence
+hand_presence_confidence
+hand_tracking_confidence
+
+smoothing
+adaptive_smoothing
+
+hand_switch_delay
+hand_loss_grace_period
+
+gesture_debounce
+click_confidence
 ```
 
-These tools allow tracking and performance changes to be tested independently.
+The default configuration should work without manual tuning.
+
+Advanced users can tune the workspace and responsiveness for their camera and screen.
 
 ---
 
-📂 Project Structure
+# 🖱️ Cursor Model
 
-RED/
-│
-├── airmouse/                 # Core application
-│
-├── hand_landmarker.task      # Hand tracking model
-├── face_landmarker.task      # Face tracking model
-│
-├── benchmark_*.py            # Performance benchmarks
-│
-├── test_*.py                 # Test suite
-│
-├── debug_observe_cursor.py   # Cursor debugging
-│
-├── cursor_observation.jsonl  # Cursor observations
-├── observation_output.txt    # Debug output
-│
-├── ARCHITECTURE_AUDIT.md     # Architecture notes
-│
-├── requirements.txt          # Python dependencies
-├── setup.py                  # Package configuration
-├── install.sh                # Installation helper
-└── run.sh                    # Launcher
+AirMouse does **not** use a traditional virtual mouse image or a physical mouse representation.
 
----
+Instead, it maps the user's natural palm movement into a configurable 2D workspace.
 
-🧩 Architecture Philosophy
+```text
+Camera Workspace
+┌─────────────────────────────┐
+│                             │
+│       ✋ Palm                │
+│                             │
+│                             │
+│                             │
+└─────────────────────────────┘
+              ↓
+        Screen Mapping
+              ↓
+┌─────────────────────────────┐
+│                             │
+│                         🖱️  │
+│                             │
+│                             │
+└─────────────────────────────┘
+```
 
-RED separates vision, interpretation, and input.
-
-┌────────────────────────────────────┐
-│              RED                   │
-│                                    │
-│  Camera                            │
-│    ↓                               │
-│  Vision                            │
-│    ↓                               │
-│  Tracking                          │
-│    ↓                               │
-│  Spatial Mapping                   │
-│    ↓                               │
-│  Gesture Engine                    │
-│    ↓                               │
-│  Input Backend                     │
-│                                    │
-└────────────────────────────────────┘
-
-This makes it possible to improve one subsystem without rewriting everything else.
-
-For example:
-
-Better hand model
-       ↓
-Same gesture engine
-       ↓
-Same input backend
+The workspace is designed so that the user does not need to move their hand to extreme camera edges to reach the corners of the screen.
 
 ---
 
-🐧 Linux & Wayland
+# 🧩 Architecture Principles
 
-RED is being developed Linux-first, with modern desktop environments in mind.
+AirMouse follows several important design principles.
 
-Particular attention is required for:
+### 1. Low latency over unnecessary complexity
 
-- Wayland
-- pointer injection
-- "/dev/uinput"
-- permissions
-- compositor behavior
-- application focus
-- input security
+Every processing stage should justify its CPU and latency cost.
 
-The vision pipeline is kept separate from the OS input layer so that different input backends can be explored without rebuilding the tracking system.
+### 2. Tracking should be independent from gestures
 
----
+Cursor movement must remain responsive while gestures are being evaluated.
 
-📊 Development Status
+### 3. Smoothness without lag
 
-Computer Vision       █████████░  90%
-Hand Tracking         █████████░  90%
-Cursor Mapping        ████████░░  80%
-Gesture Engine        ███████░░░  70%
-Two-Hand Tracking     ██████░░░░  60%
-Wayland Integration   ██████░░░░  60%
-GUI                   ████░░░░░░  40%
-Calibration            ████░░░░░░  40%
-Production Polish     ███░░░░░░░  30%
+Filtering should remove jitter without introducing noticeable input delay.
 
-«These are development targets/estimates, not formal release guarantees.»
+### 4. Fail safely
+
+Temporary tracking loss should hold the cursor rather than generate unpredictable input.
+
+### 5. No accidental actions
+
+Clicks require confidence, stability and proper gesture-state transitions.
+
+### 6. Linux-first
+
+The current implementation should be optimized for Linux desktop environments before expanding to other platforms.
 
 ---
 
-🗺️ Roadmap
+# 🔒 Privacy
 
-🟢 Core Tracking
+AirMouse is designed as a **local computer-vision application**.
 
-- [x] Webcam input
-- [x] Hand landmark detection
-- [x] MediaPipe integration
-- [x] Basic cursor mapping
-- [x] Tracking tests
-- [x] Benchmark tooling
+Camera frames are processed locally by the application.
 
-🟡 Interaction
+There is no requirement for:
 
-- [ ] Better cursor coordination
-- [ ] Eliminate mirrored movement
-- [ ] Better smoothing
-- [ ] Dynamic sensitivity
-- [ ] Reliable pinch clicking
-- [ ] Gesture debouncing
-- [ ] Scroll gestures
-- [ ] Drag gestures
-- [ ] Right click
-- [ ] Custom gestures
+* Cloud vision APIs
+* Remote AI services
+* Online image processing
+* Voice services
 
-🟠 Spatial Control
-
-- [x] Face tracking experiments
-- [x] Head-relative tracking experiments
-- [ ] Improved virtual display mapping
-- [ ] Better depth estimation
-- [ ] Automatic calibration
-
-🔵 Desktop Experience
-
-- [ ] Background mode
-- [ ] Global activation shortcut
-- [ ] Minimal settings UI
-- [ ] Sensitivity controls
-- [ ] Gesture configuration
-- [ ] System startup integration
-- [ ] Better Wayland support
-
-🚀 Long-Term
-
-- [ ] Cross-platform input abstraction
-- [ ] Windows support
-- [ ] macOS support
-- [ ] Application-specific gestures
-- [ ] Accessibility features
-- [ ] Plugin architecture
-- [ ] Advanced spatial interaction
+The project aims to keep camera processing local.
 
 ---
 
-🔐 Privacy First
+# 🛠️ Development
 
-RED's core computer-vision pipeline is designed to run locally.
+The project is actively evolving.
 
-Your camera feed does not need to be uploaded to a cloud computer-vision service for hand tracking.
+When contributing, prefer focused changes rather than large rewrites.
 
-📷 Camera
-   │
-   ▼
-💻 Your Computer
-   │
-   ▼
-🧠 Vision Processing
-   │
-   ▼
-🖱️ Input
+Before modifying a subsystem, understand its role in:
 
-Your camera. Your machine. Your data.
-
----
-
-💻 Hardware
-
-RED is intentionally designed to work with ordinary hardware.
-
-Minimum concept
-
-💻 Computer
-+
-📷 Webcam
-
-No specialized motion controller is required.
-
-Performance will depend on:
-
-- CPU
-- camera resolution
-- camera FPS
-- lighting
-- number of tracking models
-- desktop environment
-- tracking configuration
+```text
+Camera
+  ↓
+Hand Tracking
+  ↓
+Palm / Landmark Processing
+  ↓
+Cursor / Gesture Pipelines
+  ↓
+Input Backend
+```
 
 ---
 
-🤝 Contributing
+# 🧪 Testing
 
-RED is an evolving open-source project.
+Testing should cover both computer-vision behavior and real desktop interaction.
 
-Contributions are especially useful in:
+### Hand tracking
 
-- 👁️ Computer vision
-- 🖐️ Hand tracking
-- 🧠 Gesture recognition
-- 📐 Spatial mathematics
-- 🐧 Linux input
-- 🌊 Wayland
-- ⚡ Performance optimization
-- 🎨 UI/UX
-- 🧪 Testing
-- 📚 Documentation
+* [ ] Left hand
+* [ ] Right hand
+* [ ] Both hands
+* [ ] Different distances
+* [ ] Different orientations
+* [ ] Temporary occlusion
+* [ ] Hand loss
+* [ ] Hand reacquisition
+* [ ] Hand switching
 
-If you're planning a significant architectural change, open an issue first so the approach can be discussed.
+### Cursor
 
----
+* [ ] Slow movement
+* [ ] Fast movement
+* [ ] Precision movement
+* [ ] Stationary stabilization
+* [ ] Horizontal movement
+* [ ] Vertical movement
+* [ ] Diagonal movement
+* [ ] Screen corners
+* [ ] Screen boundaries
 
-🐛 Found a Bug?
+### Gestures
 
-Please include:
+* [ ] Left click
+* [ ] Right click
+* [ ] Middle click
+* [ ] Drag
+* [ ] Scroll
+* [ ] False-click rejection
 
-OS:
-Desktop Environment:
-Python:
-Camera:
-RED commit/version:
+### Performance
 
-What happened:
-
-What you expected:
-
-Steps to reproduce:
-
-Error / logs:
-
-For tracking problems, a short screen recording or debug output can make diagnosis much easier.
-
----
-
-🌟 Why RED?
-
-Most computer interfaces assume:
-
-Hand → Physical Mouse → Computer
-
-RED explores:
-
-Hand → Camera → Computer
-
-The objective isn't to replace every mouse.
-
-It's to make hands-free interaction practical.
+* [ ] FPS measurement
+* [ ] CPU measurement
+* [ ] RAM measurement
+* [ ] Input latency measurement
 
 ---
 
-🖐️ Point
+# 🗺️ Roadmap
 
-🤏 Gesture
+## Phase 1 — Core Tracking
 
-🖥️ Control
+* [x] Camera input
+* [x] Hand landmark tracking
+* [x] Linux cursor control
+* [x] Gesture framework
+* [ ] Improve hand recognition
+* [ ] Robust palm tracking
+* [ ] Stable hand switching
+
+## Phase 2 — Cursor Quality
+
+* [ ] Adaptive workspace calibration
+* [ ] Low-latency smoothing
+* [ ] Velocity-aware cursor control
+* [ ] Boundary assistance
+* [ ] 20% responsiveness improvement
+* [ ] Better precision mode
+
+## Phase 3 — Gesture System
+
+* [ ] Reliable click state machine
+* [ ] Improved drag
+* [ ] Scroll gestures
+* [ ] Custom gesture configuration
+* [ ] Gesture profiles
+
+## Phase 4 — Application Profiles
+
+* [ ] Per-application sensitivity
+* [ ] Per-application gestures
+* [ ] Automatic application detection
+* [ ] Universal Linux application support
+
+## Phase 5 — Advanced Features
+
+* [ ] Adaptive user calibration
+* [ ] Personal tracking profiles
+* [ ] Advanced gesture customization
+* [ ] Better Wayland integration
+* [ ] Additional Linux desktop environments
+
+## Future
+
+* [ ] Windows support
+* [ ] macOS support
+* [ ] Cross-platform input abstraction
+* [ ] Production-ready packaging
+* [ ] Optional commercial edition
 
 ---
 
-<p align="center">RED
+# 🐛 Known Limitations
 
-A camera. A hand. A new way to interact.
+AirMouse is still under active development.
 
-<br><a href="https://github.com/wrappingpine/RED">
-  ⭐ Star the project on GitHub
-</a></p>---
+Current areas receiving significant work:
 
-<p align="center">
-  Made with 🖐️ and 🧠
-</p>
+* Hand recognition quality
+* Tracking stability
+* Cursor latency
+* Gesture reliability
+* Wayland input integration
+* Automatic calibration
+* Multi-hand behavior
+
+Hardware, lighting, camera quality and desktop environment can affect tracking performance.
+
+---
+
+# 🤝 Contributing
+
+Contributions are welcome.
+
+Useful contributions include:
+
+* Hand-tracking improvements
+* Performance optimization
+* Gesture recognition
+* Linux/Wayland compatibility
+* Testing on different hardware
+* Bug reports
+* Documentation
+* UX improvements
+
+### Before submitting a change
+
+Please test:
+
+1. Cursor movement
+2. Hand recognition
+3. Existing gestures
+4. CPU usage
+5. Input latency
+6. Temporary tracking loss
+
+Avoid introducing unnecessary dependencies or cloud services.
+
+---
+
+# 📄 License
+
+See the repository's `LICENSE` file for the current license.
+
+---
+
+# ⭐ Project
+
+**AirMouse**
+
+> Turn your hand into a mouse.
+
+GitHub:
+
+**https://github.com/wrappingpine/RED**
+
+Built for Linux.
+Powered by computer vision.
+Designed for natural interaction.
