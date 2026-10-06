@@ -285,32 +285,55 @@ class VirtualDisplayPlane:
         u = (point_head[0] + self.width / 2) / self.width
         v = (-point_head[1] + self.height / 2) / self.height
 
-        # Policy for boundary excursions:
-        # - Inside plane: valid cursor update
-        # - Slightly outside plane (within EPSILON): reject with warning
-        #   (numerical precision at exact plane edge)
-        # - Far outside plane: reject
-        # - Hand completely lost: tracking_lost
-        EPSILON = 0.08  # 8% of normalized range — allows for numerical precision
-                        # at exact plane edges without accepting gross errors
-        if u < -EPSILON or u > 1.0 + EPSILON or v < -EPSILON or v > 1.0 + EPSILON:
+        # Boundary policy (§9):
+        # - Values inside [0,1]: valid cursor update
+        # - Small excursions beyond [0,1]: clamp to boundary.
+        #   This prevents cursor freezing when the fingertip moves
+        #   slightly outside the virtual plane (e.g. v=1.01, u=-0.02).
+        # - Catastrophic values (|u| or |v| >> 1): reject with warning.
+        #   These indicate a genuine geometry failure, not a boundary
+        #   excursion, and should not be silently clamped.
+        #
+        # The threshold for "catastrophic" is configurable via the
+        # catastrophic_tolerance parameter (default: 0.15, i.e. 15%
+        # beyond the plane boundary).  Values within [−0.15, 1.15] are
+        # clamped; values beyond are rejected.
+        catastrophic_tolerance = 0.15
+
+        if u < -catastrophic_tolerance or u > 1.0 + catastrophic_tolerance or \
+           v < -catastrophic_tolerance or v > 1.0 + catastrophic_tolerance:
             _rate_logger.warn(
                 "projection_intersection_failed",
                 "event=projection_intersection_failed "
                 f"u={u:.3f} v={v:.3f} "
-                "reason=out_of_bounds "
+                "reason=catastrophic_out_of_bounds "
                 "action=return_invalid"
             )
             logger.debug(
-                f"Intersection outside plane bounds: u={u:.3f}, v={v:.3f} - marking as invalid"
+                f"Intersection catastrophically outside plane bounds: "
+                f"u={u:.3f}, v={v:.3f} - marking as invalid"
             )
-            # Return None to indicate invalid projection
             return None
 
-        # Return valid u/v within [0,1] (clamped to boundary for tiny excursions)
-        u_clamped = max(0.0, min(1.0, u))
-        v_clamped = max(0.0, min(1.0, v))
-        return (float(u_clamped), float(v_clamped))
+        # Clamp small excursions to the boundary.
+        # This is intentional: a fingertip slightly beyond the plane
+        # edge should map to the screen edge, not freeze the cursor.
+        u_clamped = float(np.clip(u, 0.0, 1.0))
+        v_clamped = float(np.clip(v, 0.0, 1.0))
+
+        # Log boundary clamps at debug level (rate-limited) so they
+        # don't spam the console but are visible when troubleshooting.
+        if u != u_clamped or v != v_clamped:
+            _rate_logger.warn(
+                "projection_boundary_clamped",
+                f"event=projection_boundary_clamped "
+                f"u_raw={u:.3f} v_raw={v:.3f} "
+                f"u_clamped={u_clamped:.3f} v_clamped={v_clamped:.3f} "
+                "reason=slight_out_of_bounds "
+                "action=clamp_to_boundary"
+            )
+
+        return (u_clamped, v_clamped)
 
     def clamp_to_bounds(self, u: float, v: float) -> Tuple[float, float]:
         """

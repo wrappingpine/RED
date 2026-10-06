@@ -71,10 +71,20 @@ class TrackingConfig:
     max_wrist_jump: float = 0.5      # Wrist can move more (normalized)
     max_hand_center_jump: float = 0.25  # Max normalized distance hand center can move per frame
 
-    # One Euro Filter parameters
-    one_euro_min_cutoff: float = 1.0
-    one_euro_beta: float = 0.007
-    one_euro_d_cutoff: float = 1.0
+    # One Euro Filter parameters — tuned for low-latency cursor tracking.
+    # min_cutoff=0.35: At rest, this gives light smoothing (alpha ≈ 0.90
+    #   at 30fps) which suppresses jitter without introducing visible lag.
+    #   A value of 1.0 was too aggressive, creating ~40-60ms delay on
+    #   first movement and making the cursor feel "mushy".
+    # beta=0.004: Makes cutoff frequency increase with velocity.  Fast hand
+    #   movements get progressively less smoothing (alpha → 1.0) while slow
+    #   movements stay lightly filtered.  Lower beta than before to keep
+    #   the filter responsive during normal hand motion.
+    # d_cutoff=0.35: Derivative smoothing.  Lower than 1.0 to allow faster
+    #   adaptation to acceleration changes without overshoot.
+    one_euro_min_cutoff: float = 0.35
+    one_euro_beta: float = 0.004
+    one_euro_d_cutoff: float = 0.35
 
     # Dead zone
     dead_zone_radius: float = 0.015  # Normalized radius

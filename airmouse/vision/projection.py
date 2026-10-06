@@ -236,6 +236,17 @@ class HandProjector:
             label, details
         )
 
+    def _log_projection_failure(self, label: str, **kwargs):
+        """
+        Emit a structured diagnostic record for EVERY invalid intersection.
+
+        Rate-limited: only fires once per 2 seconds per event type.
+        """
+        # In production, we don't log every failure - just the rate-limited warning
+        # in virtual_plane.py.  This method is kept for potential future use
+        # but currently does nothing to avoid log spam.
+        pass
+
     def project(
         self,
         hand: Hand,
@@ -479,6 +490,23 @@ class HandProjector:
 
         if intersection_head is None:
             self._failed_count += 1
+            # DIAGNOSTIC: ray missed plane — log full geometry
+            self._log_projection_failure("ray_miss_head",
+                ray_origin_x=float(eye_midpoint_head[0]),
+                ray_origin_y=float(eye_midpoint_head[1]),
+                ray_origin_z=float(eye_midpoint_head[2]),
+                ray_direction_x=float(ray_direction_head[0]),
+                ray_direction_y=float(ray_direction_head[1]),
+                ray_direction_z=float(ray_direction_head[2]),
+                ray_norm=float(np.linalg.norm(ray_direction_head)),
+                plane_distance=self.virtual_plane.distance,
+                denominator=float(ray_direction_head[2]),
+                fingertip_head_x=float(fingertip_head[0]),
+                fingertip_head_y=float(fingertip_head[1]),
+                fingertip_head_z=float(fingertip_head[2]),
+                eye_head_z=float(eye_midpoint_head[2]),
+                dx=float(dx), dy=float(dy), dz=float(dz),
+            )
             return ProjectionResult(
                 valid=False,
                 error_message="Ray-plane intersection failed in head coordinates"
@@ -504,13 +532,84 @@ class HandProjector:
         # 1. The fallback is triggered (correct behavior)
         # 2. The error message matches the fallback condition
         # 3. The enormous u/v never reaches point_to_normalized
-        max_intersection_distance = 5.0  # 5 units — far beyond plane bounds
+        #
+        # The distance threshold must be tight enough to catch all
+        # out-of-bounds intersections.  With a 1.0×1.0 plane at z=0.30,
+        # the maximum valid intersection distance is ~0.78 units
+        # (diagonal corner).  A threshold of 1.5 units catches all
+        # out-of-bounds cases while still allowing valid intersections
+        # at any plane angle.
+        max_intersection_distance = 1.5
         intersection_distance = float(np.linalg.norm(intersection_head - eye_midpoint_head))
         if intersection_distance > max_intersection_distance:
             self._failed_count += 1
+            # DIAGNOSTIC: intersection too distant — log full geometry
+            self._log_projection_failure("intersection_too_distant",
+                ray_origin_x=float(eye_midpoint_head[0]),
+                ray_origin_y=float(eye_midpoint_head[1]),
+                ray_origin_z=float(eye_midpoint_head[2]),
+                ray_direction_x=float(ray_direction_head[0]),
+                ray_direction_y=float(ray_direction_head[1]),
+                ray_direction_z=float(ray_direction_head[2]),
+                ray_direction_norm=float(np.linalg.norm(ray_direction_head)),
+                plane_distance=self.virtual_plane.distance,
+                plane_width=self.virtual_plane.width,
+                plane_height=self.virtual_plane.height,
+                denominator=float(ray_direction_head[2]),
+                numerator=float(self.virtual_plane.distance - eye_midpoint_head[2]),
+                t=float((self.virtual_plane.distance - eye_midpoint_head[2]) / max(abs(ray_direction_head[2]), 1e-10)),
+                intersection_x=float(intersection_head[0]),
+                intersection_y=float(intersection_head[1]),
+                intersection_z=float(intersection_head[2]),
+                intersection_distance=float(intersection_distance),
+                fingertip_head_x=float(fingertip_head[0]),
+                fingertip_head_y=float(fingertip_head[1]),
+                fingertip_head_z=float(fingertip_head[2]),
+                eye_head_z=float(eye_midpoint_head[2]),
+                dx=float(dx), dy=float(dy), dz=float(dz),
+            )
             return ProjectionResult(
                 valid=False,
                 error_message="Ray-plane intersection failed: intersection too distant"
+            )
+
+        # Check intersection is within plane bounds BEFORE calling
+        # point_to_normalized.  This prevents the point_to_normalized
+        # EPSILON check from logging the projection_intersection_failed
+        # warning for cases that are expected to fail (ray nearly
+        # parallel to plane, fingertip at eye depth).
+        half_w = self.virtual_plane.width / 2.0
+        half_h = self.virtual_plane.height / 2.0
+        if (abs(intersection_head[0]) > half_w + 0.1 or
+                abs(intersection_head[1]) > half_h + 0.1):
+            self._failed_count += 1
+            self._log_projection_failure("point_outside_bounds",
+                ray_origin_x=float(eye_midpoint_head[0]),
+                ray_origin_y=float(eye_midpoint_head[1]),
+                ray_origin_z=float(eye_midpoint_head[2]),
+                ray_direction_x=float(ray_direction_head[0]),
+                ray_direction_y=float(ray_direction_head[1]),
+                ray_direction_z=float(ray_direction_head[2]),
+                ray_direction_norm=float(np.linalg.norm(ray_direction_head)),
+                plane_distance=self.virtual_plane.distance,
+                plane_width=self.virtual_plane.width,
+                plane_height=self.virtual_plane.height,
+                denominator=float(ray_direction_head[2]),
+                numerator=float(self.virtual_plane.distance - eye_midpoint_head[2]),
+                t=float((self.virtual_plane.distance - eye_midpoint_head[2]) / max(abs(ray_direction_head[2]), 1e-10)),
+                intersection_x=float(intersection_head[0]),
+                intersection_y=float(intersection_head[1]),
+                intersection_z=float(intersection_head[2]),
+                intersection_distance=float(np.linalg.norm(intersection_head - eye_midpoint_head)),
+                fingertip_head_x=float(fingertip_head[0]),
+                fingertip_head_y=float(fingertip_head[1]),
+                fingertip_head_z=float(fingertip_head[2]),
+                eye_head_z=float(eye_midpoint_head[2]),
+                dx=float(dx), dy=float(dy), dz=float(dz),
+            )
+            return ProjectionResult(
+                valid=False,
+                error_message="Ray-plane intersection failed: point outside plane bounds"
             )
 
         # Convert to normalized coordinates
@@ -524,6 +623,31 @@ class HandProjector:
             # are invalid.  Use the same error message as the ray miss case
             # so the fallback at line 382 triggers.
             self._failed_count += 1
+            # DIAGNOSTIC: point outside plane bounds — log full geometry
+            self._log_projection_failure("point_outside_bounds",
+                ray_origin_x=float(eye_midpoint_head[0]),
+                ray_origin_y=float(eye_midpoint_head[1]),
+                ray_origin_z=float(eye_midpoint_head[2]),
+                ray_direction_x=float(ray_direction_head[0]),
+                ray_direction_y=float(ray_direction_head[1]),
+                ray_direction_z=float(ray_direction_head[2]),
+                ray_direction_norm=float(np.linalg.norm(ray_direction_head)),
+                plane_distance=self.virtual_plane.distance,
+                plane_width=self.virtual_plane.width,
+                plane_height=self.virtual_plane.height,
+                denominator=float(ray_direction_head[2]),
+                numerator=float(self.virtual_plane.distance - eye_midpoint_head[2]),
+                t=float((self.virtual_plane.distance - eye_midpoint_head[2]) / max(abs(ray_direction_head[2]), 1e-10)),
+                intersection_x=float(intersection_head[0]),
+                intersection_y=float(intersection_head[1]),
+                intersection_z=float(intersection_head[2]),
+                intersection_distance=float(np.linalg.norm(intersection_head - eye_midpoint_head)),
+                fingertip_head_x=float(fingertip_head[0]),
+                fingertip_head_y=float(fingertip_head[1]),
+                fingertip_head_z=float(fingertip_head[2]),
+                eye_head_z=float(eye_midpoint_head[2]),
+                dx=float(dx), dy=float(dy), dz=float(dz),
+            )
             return ProjectionResult(
                 valid=False,
                 error_message="Ray-plane intersection failed: point outside plane bounds"

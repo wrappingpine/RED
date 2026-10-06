@@ -71,6 +71,9 @@ class FrameData:
     mouse_time: float = 0.0
     total_pipeline_time: float = 0.0
 
+    # Latency breakdown dict (populated by FrameCoordination)
+    latency_data: Optional[Dict[str, float]] = None
+
 
 class FrameCoordination:
     """
@@ -1346,7 +1349,22 @@ class AirMouseController:
             avg_frame_time = sum(self._frame_times) / len(self._frame_times)
             self.stats.fps = 1.0 / avg_frame_time if avg_frame_time > 0 else 0
 
-        # Add pipeline coordination stats
+        # Aggregate performance report every ~2 seconds (not every frame)
+        # so we can see which stage dominates without log spam.
+        if not hasattr(self, '_perf_report_time'):
+            self._perf_report_time = 0.0
+        if current_time - self._perf_report_time >= 2.0:
+            self._perf_report_time = current_time
+            self._report_performance_aggregate()
+
+        # Update performance monitor latency breakdown
+        if frame_data.latency_data:
+            self.performance_monitor.update_latency(
+                camera_to_landmark_ms=frame_data.latency_data.get('hand_detection', 0),
+                landmark_to_pointer_ms=frame_data.latency_data.get('tracking', 0),
+                end_to_end_ms=frame_data.latency_data.get('total', 0),
+            )
+
         latency_stats = self._frame_coord.get_latency_stats()
         self.stats.pipeline_latency_ms = latency_stats['total']['mean']
         self.stats.stage_latencies = {k: v['mean'] for k, v in latency_stats['stages'].items()}
@@ -1357,6 +1375,35 @@ class AirMouseController:
 
         if self.on_stats_update:
             self.on_stats_update(self.stats)
+
+    def _report_performance_aggregate(self):
+        """Print aggregate performance report every ~2 seconds."""
+        n = len(self._frame_times)
+        if n < 5:
+            return
+        avg_frame_time = sum(self._frame_times) / n
+        fps = 1.0 / avg_frame_time if avg_frame_time > 0 else 0
+
+        hand_ms = self.stats.hand_detection_time_ms
+        face_ms = self.stats.gesture_time_ms  # reused for face detection
+        track_ms = self.stats.cursor_time_ms
+        gesture_ms = self.stats.gesture_time_ms
+        mouse_ms = self.stats.mouse_time_ms
+
+        # Estimate end-to-end: sum of all measured stages
+        e2e = hand_ms + face_ms + track_ms + gesture_ms + mouse_ms
+
+        logger.info(
+            f"AirMouse performance: "
+            f"FPS={fps:.1f} "
+            f"frame={avg_frame_time * 1000:.1f}ms "
+            f"inference={hand_ms:.1f}ms "
+            f"face={face_ms:.1f}ms "
+            f"projection={track_ms:.1f}ms "
+            f"smoothing={gesture_ms:.1f}ms "
+            f"input={mouse_ms:.1f}ms "
+            f"end_to_end={e2e:.1f}ms"
+        )
 
     def _handle_gestures(self, events: List[GestureEvent],
                          rel_movement: Optional[tuple], hands: List[TrackedHand]):
@@ -1670,9 +1717,14 @@ class AirMouseController:
         Check if we have sufficient confidence for click gestures.
         
         Per §53: high-risk actions (clicks, drags) require HIGH confidence.
+        
+        NOTE: ConfidenceState enum values are HIGH=1, MEDIUM=2, LOW=3,
+        LOST=4 (from auto()), so we must check for HIGH specifically —
+        a naive ``value >= 2`` would accept MEDIUM/LOW/LOST and reject
+        HIGH, which is the exact opposite of the intended gate.
         """
         conf_state = self._tracking_status.confidence.state
-        return conf_state.value >= 2  # HIGH (2) or VERY_HIGH (3)
+        return conf_state == ConfidenceState.HIGH
 
     def toggle_debug_overlay(self):
         """Toggle the performance debug overlay."""

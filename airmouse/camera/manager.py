@@ -303,6 +303,29 @@ class CameraManager:
             f"Camera opened: {actual_width}x{actual_height} @ {actual_fps:.1f}fps"
         )
 
+        # CRITICAL: Verify that the actual frame dimensions match what we
+        # pre-allocated in the frame pool.  OpenCV's V4L2 backend may
+        # negotiate a different resolution than requested (e.g. when the
+        # camera doesn't support the exact mode).  If the pool shape is
+        # wrong, every subsequent ``read()`` would silently corrupt frames.
+        if (actual_height, actual_width) != self._frame_shape[:2]:
+            logger.warning(
+                f"Camera returned {actual_width}x{actual_height} but frame pool "
+                f"was allocated for {self._frame_shape[1]}x{self._frame_shape[0]}. "
+                f"Reallocating frame pool to match actual dimensions."
+            )
+            self._frame_shape = (actual_height, actual_width, 3)
+            self._frame_pool = [
+                np.zeros(self._frame_shape, dtype=np.uint8)
+                for _ in range(self._pool_size)
+            ]
+            self._pool_index = 0
+        else:
+            logger.debug(
+                f"Frame pool verified: {actual_width}x{actual_height} matches "
+                f"requested dimensions"
+            )
+
         # Check V4L2 controls for auto-exposure
         self._check_v4l2_controls()
 

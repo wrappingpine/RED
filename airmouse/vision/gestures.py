@@ -519,40 +519,66 @@ class GestureRecognizer:
             self._process_scroll(primary_hand, current_time, events)
 
         # Check middle click (thumb + ring pinch) with hysteresis
+        # GATE: require minimum hand confidence before even considering
+        # a middle-click candidate.  Without this gate, noisy landmark
+        # estimates during cursor movement can produce pinch distances
+        # that dip below the threshold, generating false MIDDLE_CLICK
+        # candidates that then get filtered by the confidence check
+        # in main_loop.py — producing the "Click blocked: insufficient
+        # confidence" spam.
         middle_pinch_dist = primary_hand.pinch_distance("thumb", "ring")
         middle_pinch_condition = middle_pinch_dist < self.config.pinch_enter_threshold
-        
-        # Update phase machine for middle pinch (§31)
-        self._update_phase(self._state.middle_pinch_phase, middle_pinch_condition, current_time)
-        
-        if not self._state._middle_pinch_active:
-            # Check enter threshold
-            if middle_pinch_dist < self.config.pinch_enter_threshold:
-                self._state._middle_pinch_active = True
+
+        # Confidence gate: only evaluate middle-click when the hand
+        # confidence is high enough to trust landmark geometry.
+        # Default 0.6: above the tracking minimum (0.40) but below
+        # the click confidence gate (HIGH state, typically >0.7).
+        # This prevents false candidates from entering the state machine.
+        middle_click_min_conf = getattr(self.config, 'middle_click_min_confidence', 0.60)
+
+        if primary_hand.confidence < middle_click_min_conf:
+            # Reset middle pinch state when confidence is too low
+            if self._state._middle_pinch_active:
+                self._state._middle_pinch_active = False
                 self._state._middle_pinch_confirmed = False
-                self._state._middle_pinch_start_time = current_time
+            # Skip phase update entirely — don't advance the state
+            # machine on low-confidence frames.
         else:
-            # Pinch active - check confirm/release
-            if not self._state._middle_pinch_confirmed:
-                # Waiting for confirmation
-                if middle_pinch_dist < self.config.pinch_confirm_threshold:
-                    # Check cooldown before confirming
-                    time_since_last_click = current_time - self._state.last_middle_click_time
-                    if time_since_last_click >= self._state.middle_click_cooldown:
-                        self._state._middle_pinch_confirmed = True
-                        self._state.last_middle_click_time = current_time
-                        # Emit MIDDLE_CLICK event on confirmation (not on enter)
-                        events.append(GestureEvent(
-                            gesture_type=GestureType.MIDDLE_CLICK,
-                            hand=primary_hand,
-                            timestamp=current_time
-                        ))
-            else:
-                # Confirmed - check release
-                if middle_pinch_dist > self.config.pinch_release_threshold:
-                    # Release pinch - reset state
-                    self._state._middle_pinch_active = False
+            # Update phase machine for middle pinch (§31)
+            self._update_phase(self._state.middle_pinch_phase, middle_pinch_condition, current_time)
+
+            if not self._state._middle_pinch_active:
+                # Check enter threshold
+                if middle_pinch_dist < self.config.pinch_enter_threshold:
+                    self._state._middle_pinch_active = True
                     self._state._middle_pinch_confirmed = False
+                    self._state._middle_pinch_start_time = current_time
+            else:
+                # Pinch active - check confirm/release
+                if not self._state._middle_pinch_confirmed:
+                    # Waiting for confirmation
+                    if middle_pinch_dist < self.config.pinch_confirm_threshold:
+                        # Check cooldown before confirming
+                        time_since_last_click = current_time - self._state.last_middle_click_time
+                        if time_since_last_click >= self._state.middle_click_cooldown:
+                            self._state._middle_pinch_confirmed = True
+                            self._state.last_middle_click_time = current_time
+                            # Emit MIDDLE_CLICK event on confirmation (not on enter)
+                            events.append(GestureEvent(
+                                gesture_type=GestureType.MIDDLE_CLICK,
+                                hand=primary_hand,
+                                timestamp=current_time
+                            ))
+                            logger.info(
+                                "middle_click_fired: dist=%.4f conf=%.2f state=FIRED",
+                                middle_pinch_dist, primary_hand.confidence
+                            )
+                else:
+                    # Confirmed - check release
+                    if middle_pinch_dist > self.config.pinch_release_threshold:
+                        # Release pinch - reset state
+                        self._state._middle_pinch_active = False
+                        self._state._middle_pinch_confirmed = False
 
         # Check open palm (all fingers extended) - §30.5
         if primary_hand.is_open_palm():

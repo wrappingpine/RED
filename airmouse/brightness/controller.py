@@ -71,7 +71,12 @@ class AutoBrightnessController:
         self._stop_event = threading.Event()
 
     def _ensure_hardware(self):
-        """Probe ALS / backlight hardware once, lazily."""
+        """Probe ALS / backlight hardware once, lazily.
+
+        Warnings about missing hardware are emitted here — exactly once
+        per process — rather than on every ``start()`` call, so pause /
+        resume cycles don't spam the log.
+        """
         if self._als is not None or self._backlight is not None:
             return
         self._als = AmbientLightSensor()
@@ -80,9 +85,10 @@ class AutoBrightnessController:
         self._backlight_available = self._backlight.is_available()
 
         if not self._als_available:
-            logger.info("No ambient light sensor available")
+            logger.warning("No ambient light sensor available"
+                           + (" (required by config)" if self._config.require_als else ""))
         if not self._backlight_available:
-            logger.info("Backlight control not available (no write permission)")
+            logger.warning("Backlight control not available (no write permission)")
 
     @property
     def is_available(self) -> bool:
@@ -125,16 +131,18 @@ class AutoBrightnessController:
             return False
 
         # Probe hardware lazily — first time we're actually asked to run.
+        # Warnings about missing hardware are emitted by _ensure_hardware()
+        # exactly once; do not duplicate them here.
         self._ensure_hardware()
 
         if not self._als_available:
             if self._config.require_als:
                 logger.error("ALS required but not available")
                 return False
-            logger.warning("Starting without ALS - will use fixed brightness")
+            # Warning already emitted by _ensure_hardware()
 
         if not self._backlight_available:
-            logger.error("Backlight control not available")
+            # Warning already emitted by _ensure_hardware()
             return False
 
         # Save original brightness

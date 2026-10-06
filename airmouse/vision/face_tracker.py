@@ -344,6 +344,14 @@ class FaceTracker:
             data=rgb_frame
         )
 
+        # CRITICAL FIX: Set image_dimensions explicitly to avoid
+        # "NORM_RECT without IMAGE_DIMENSIONS" warning from
+        # landmark_projection_calculator.
+        try:
+            mp_image.image_dimensions = (rgb_frame.shape[1], rgb_frame.shape[0])
+        except Exception:
+            pass
+
         # Detect faces in VIDEO mode
         self._timestamp_ms += 33  # ~30 FPS
         result = self._landmarker.detect_for_video(mp_image, self._timestamp_ms)
