@@ -52,7 +52,7 @@ python -m airmouse.tests.test_projection --synthetic --directions
 
 **Setup**:
 ```bash
-python -m airmouse.tests.test_head_relative --invariance
+python -m pytest airmouse/tests/test_head_relative.py -v
 ```
 
 **Test**: 

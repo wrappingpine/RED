@@ -265,31 +265,24 @@ chmod +x run.sh
 
 🧪 Developer Mode
 
-RED contains multiple testing and benchmarking utilities.
+All tests live in `airmouse/tests/`. Run the full suite with:
 
-Hand tracking
+```sh
+pytest airmouse/tests/ -v
+```
 
-python test_hand_tracker.py
+Individual test modules can also be run directly, e.g.:
 
-Coordinate mapping
-
-python test_mapping.py
-
-Head-relative tracking
-
-python test_head_relative.py
-
-General runtime test
-
-python test_run.py
+```sh
+python -m pytest airmouse/tests/test_projection.py -v
+```
 
 Performance benchmarks
 
-benchmark_face.py
-benchmark_full.py
-benchmark_image.py
-benchmark_video.py
-benchmark_video2.py
+```sh
+python benchmark_full.py --iterations 30
+python benchmark_full.py --iterations 5 --ci   # emit P95=<ms> for CI gate
+```
 
 These tools allow tracking and performance changes to be tested independently.
 
